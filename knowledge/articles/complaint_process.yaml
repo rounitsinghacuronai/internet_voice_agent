@@ -1,0 +1,47 @@
+id: complaint_process
+title: Complaint registration, SOP times and escalation
+category: complaints
+kind: sop
+source: "Training Manual pp.25-36"
+version: "2026-07"
+language: en
+sections:
+  - title: How complaints flow
+    keywords: [complaint, SR, तक्रार, शिकायत, register]
+    text: >
+      Complaints registered at the Centralized Customer Care Centre get an SR number sent
+      automatically by SMS to the registered mobile. Technical complaints auto-assign to
+      the section engineer or technician; commercial (billing) complaints go to the
+      Sub-Division Office. On resolution the SR is closed in CRM and the consumer gets a
+      confirmation SMS.
+  - title: Standard resolution times for supply complaints
+    keywords: [SOP, resolution time, ETA, कितने घंटे, किती वेळ]
+    text: >
+      Standard resolution times - Supply Failed Phase out: 8 hours. Supply Failed Total
+      Area: 11 hours. Line snapped: 4 hours. Pole fell down or leaning: 4 hours. Pole
+      giving shock: immediate, within 2 hours final. Transformer sparking or smoke:
+      immediate attendance, resolution within 8 hours. Transformer burnt: 30 hours.
+      Overhead line breakdown 11/22 KV: 11 hours. Cable fault: 25 hours. Voltage
+      complaints: 48 hours.
+  - title: Standard resolution times for billing and meter complaints
+    keywords: [SOP billing, meter time, बिल तक्रार वेळ]
+    text: >
+      High Bill, Average bill, Low Bill, Late Bill Receipt, Meter Reading Correction and
+      Meter reading not taken: 720 hours (30 days). Non receipt of bill: 24 hours. Meter
+      Burnt: 30 hours. Meter Stuck/Stop and Meter not functioning: 184 hours. Change of
+      Name and load Extension/Reduction: 1440 hours (60 days). New Connection: 720 hours.
+      Shifting of Meter: 232 hours. Temporary Connection: 25 hours.
+  - title: Escalation ladder
+    keywords: [escalation, higher officer, वरिष्ठ]
+    text: >
+      If a complaint is not resolved within its standard time, it escalates automatically.
+      Technical complaints: technician or section engineer, then Sub-Divisional Officer
+      (level 1), then Executive Engineer (level 2). Commercial complaints: Sub-Divisional
+      Officer, then Executive Engineer (level 1), then Superintending Engineer (level 2).
+  - title: Ways to register a complaint
+    keywords: [toll free, app, WSS, missed call, WhatsApp]
+    text: >
+      Consumers can register complaints through the toll-free numbers 1912, 19120,
+      1800-233-3435 or 1800-102-3435 (24x7), the Mahavitaran mobile app, Web Self Service
+      at mahadiscom.in, missed-call and SMS service for power-failure complaints, email,
+      or social media. The call centre operates round the clock from Bhandup (Thane) and Pune.

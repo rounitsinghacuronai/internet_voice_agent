@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mahavitaran Customer Care</title>
+<style>
+:root{--bg:#0d1220;--panel:#151c2e;--panel2:#1b2440;--txt:#e8ecf6;--dim:#8a94ad;
+--accent:#ff8a00;--accent2:#2f81f7;--ok:#2ea86b;--err:#e5534b;--radius:14px;
+font-family:'Segoe UI',system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);min-height:100vh;display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:14px;padding:14px 22px;background:var(--panel);
+border-bottom:1px solid #232d4a}
+.logo{width:38px;height:38px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#ffb45c);
+display:grid;place-items:center;font-weight:800;color:#1a1205;font-size:19px}
+header h1{font-size:17px;font-weight:600}header .sub{font-size:12px;color:var(--dim)}
+.status{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim)}
+.dot{width:10px;height:10px;border-radius:50%;background:#555;transition:.2s}
+.dot.listening{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot.thinking{background:var(--accent);animation:pulse 1s infinite}
+.dot.speaking{background:var(--accent2);box-shadow:0 0 8px var(--accent2)}
+@keyframes pulse{50%{opacity:.4}}
+main{flex:1;display:grid;grid-template-columns:1fr 300px;gap:16px;padding:16px 22px;max-width:1200px;
+width:100%;margin:0 auto}
+@media(max-width:820px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid #232d4a;border-radius:var(--radius);display:flex;
+flex-direction:column;overflow:hidden}
+.card h2{font-size:12px;letter-spacing:.08em;color:var(--dim);text-transform:uppercase;
+padding:12px 16px;border-bottom:1px solid #232d4a}
+#transcript{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;
+min-height:340px;max-height:calc(100vh - 300px)}
+.msg{max-width:78%;padding:10px 14px;border-radius:12px;font-size:14.5px;line-height:1.45;
+animation:in .18s ease}
+@keyframes in{from{opacity:0;transform:translateY(6px)}}
+.msg.user{align-self:flex-end;background:var(--accent2);color:#fff;border-bottom-right-radius:4px}
+.msg.agent{align-self:flex-start;background:var(--panel2);border-bottom-left-radius:4px}
+.msg .who{font-size:10.5px;opacity:.65;margin-bottom:3px;letter-spacing:.05em}
+.controls{display:flex;gap:10px;padding:14px 16px;border-top:1px solid #232d4a;align-items:center}
+button{border:0;border-radius:10px;padding:12px 22px;font-size:14.5px;font-weight:600;cursor:pointer;
+transition:.15s}
+#callBtn{background:var(--ok);color:#fff;min-width:150px}
+#callBtn.oncall{background:var(--err)}
+#callBtn:disabled{opacity:.5;cursor:default}
+#textInput{flex:1;background:var(--panel2);border:1px solid #2a3554;border-radius:10px;color:var(--txt);
+padding:11px 14px;font-size:14px;outline:none}
+#textInput:focus{border-color:var(--accent2)}
+.side{display:flex;flex-direction:column;gap:16px}
+.kv{padding:12px 16px;font-size:13.5px;display:flex;flex-direction:column;gap:8px}
+.kv div{display:flex;justify-content:space-between;gap:8px}
+.kv .k{color:var(--dim)}.kv .v{text-align:right;word-break:break-all}
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+.badge.yes{background:#12351f;color:#4cd98a}.badge.no{background:#3a1a1a;color:#ff9d94}
+#complaints{padding:10px 16px;font-size:13px;color:var(--dim);display:flex;flex-direction:column;gap:8px}
+.sr{background:var(--panel2);border-radius:8px;padding:8px 10px;color:var(--txt)}
+.sr b{color:var(--accent)}
+#meter{height:44px;padding:8px 16px 14px}
+#meterBar{height:8px;border-radius:6px;background:#232d4a;overflow:hidden}
+#meterFill{height:100%;width:0%;background:linear-gradient(90deg,var(--ok),var(--accent));
+transition:width .08s}
+.hint{padding:10px 16px 14px;font-size:12px;color:var(--dim);line-height:1.5}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">म</div>
+  <div><h1>Mahavitaran Customer Care</h1><div class="sub">MSEDCL · AI Voice Executive · Priya</div></div>
+  <div class="status"><span id="statusText">Idle</span><div class="dot" id="dot"></div></div>
+</header>
+<main>
+  <section class="card">
+    <h2>Live Call</h2>
+    <div id="transcript"></div>
+    <div class="controls">
+      <button id="callBtn">📞 Start Call</button>
+      <input id="textInput" placeholder="Or type a message (testing)…" disabled>
+    </div>
+  </section>
+  <aside class="side">
+    <div class="card"><h2>Mic Level</h2><div id="meter"><div id="meterBar"><div id="meterFill"></div></div></div></div>
+    <div class="card"><h2>Call Memory</h2>
+      <div class="kv">
+        <div><span class="k">Name</span><span class="v" id="mName">—</span></div>
+        <div><span class="k">Consumer No.</span><span class="v" id="mConsumer">—</span></div>
+        <div><span class="k">Mobile</span><span class="v" id="mMobile">—</span></div>
+        <div><span class="k">Language</span><span class="v" id="mLang">—</span></div>
+        <div><span class="k">Verified</span><span class="v"><span class="badge no" id="mVerified">NO</span></span></div>
+      </div>
+    </div>
+    <div class="card"><h2>Complaints This Call</h2><div id="complaints">None yet</div></div>
+    <div class="card"><h2>Tips</h2><div class="hint">Speak naturally in Marathi, Hindi or English — or mix.
+    Try: “लाईट गेली आहे”, “bill bahut zyada aaya hai”, “wire fell on the road!”.
+    You can interrupt Priya any time by speaking.</div></div>
+  </aside>
+</main>
+<script>
+const IN_RATE=16000, OUT_RATE=24000;
+let ws, audioCtx, micStream, workletNode, playCtx, playTime=0, activeSources=[], onCall=false;
+
+const $=id=>document.getElementById(id);
+const transcript=$('transcript');
+
+function setStatus(s){$('statusText').textContent=s.charAt(0).toUpperCase()+s.slice(1);
+  $('dot').className='dot '+s;}
+function addMsg(role,text){
+  const last=transcript.lastElementChild;
+  if(last&&last.dataset.role===role&&role==='agent'&&last.dataset.open==='1'){
+    last.querySelector('.body').textContent+=' '+text;}
+  else{const d=document.createElement('div');d.className='msg '+(role==='user'?'user':'agent');
+    d.dataset.role=role;d.dataset.open=role==='agent'?'1':'0';
+    d.innerHTML=`<div class="who">${role==='user'?'YOU':'PRIYA'}</div><div class="body"></div>`;
+    d.querySelector('.body').textContent=text;transcript.appendChild(d);}
+  transcript.scrollTop=transcript.scrollHeight;}
+function closeAgentMsg(){const last=transcript.lastElementChild;
+  if(last&&last.dataset.role==='agent')last.dataset.open='0';}
+
+// ── playback ──
+// AudioContext MUST be created inside a user-gesture handler (the Start Call
+// click).  Creating it lazily when the first binary WS message arrives puts
+// it outside the gesture window and Chrome/Safari will silently suspend it,
+// so audio is scheduled but never heard.
+function initPlayCtx(){
+  if(playCtx)return;
+  playCtx=new AudioContext({sampleRate:OUT_RATE});
+  playTime=playCtx.currentTime;}
+
+function ensurePlayCtx(){
+  initPlayCtx();
+  // If the context got suspended (tab switched, second call, etc.) resume it.
+  if(playCtx.state==='suspended')playCtx.resume();}
+
+function playChunk(buf){
+  ensurePlayCtx();
+  const i16=new Int16Array(buf);
+  const f32=new Float32Array(i16.length);
+  for(let i=0;i<i16.length;i++)f32[i]=i16[i]/32768;
+  const ab=playCtx.createBuffer(1,f32.length,OUT_RATE);
+  ab.getChannelData(0).set(f32);
+  const src=playCtx.createBufferSource();
+  src.buffer=ab;src.connect(playCtx.destination);
+  // Schedule: jump ahead if we fell behind (network gap), else chain directly.
+  playTime=Math.max(playTime,playCtx.currentTime+0.04);
+  src.start(playTime);
+  playTime+=ab.duration;
+  activeSources.push(src);
+  src.onended=()=>{activeSources=activeSources.filter(s=>s!==src);};}
+
+function flushPlayback(){
+  activeSources.forEach(s=>{try{s.stop()}catch(e){}});
+  activeSources=[];
+  if(playCtx)playTime=playCtx.currentTime;}
+
+// ── mic capture: browser AEC/AGC/NS + worklet downsample to 16k PCM16 ──
+const workletCode=`
+class PCMTap extends AudioWorkletProcessor{
+  constructor(){super();this.buf=[];this.ratio=sampleRate/${IN_RATE};this.acc=0;}
+  process(inputs){const ch=inputs[0][0];if(!ch)return true;
+    for(let i=0;i<ch.length;i++){this.acc+=1;
+      if(this.acc>=this.ratio){this.acc-=this.ratio;this.buf.push(ch[i]);}}
+    if(this.buf.length>=640){ // 40ms
+      const out=new Int16Array(640);let peak=0;
+      for(let i=0;i<640;i++){const v=Math.max(-1,Math.min(1,this.buf[i]));
+        out[i]=v*32767;peak=Math.max(peak,Math.abs(v));}
+      this.buf=this.buf.slice(640);
+      this.port.postMessage({pcm:out.buffer,peak},[out.buffer]);}
+    return true;}}
+registerProcessor('pcm-tap',PCMTap);`;
+
+async function startMic(){
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{
+    echoCancellation:true,autoGainControl:true,noiseSuppression:true,
+    channelCount:1,sampleRate:48000}});
+  audioCtx=new AudioContext();
+  await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([workletCode],{type:'application/javascript'})));
+  const srcNode=audioCtx.createMediaStreamSource(micStream);
+  workletNode=new AudioWorkletNode(audioCtx,'pcm-tap');
+  workletNode.port.onmessage=e=>{
+    $('meterFill').style.width=Math.min(100,e.data.peak*160)+'%';
+    if(ws&&ws.readyState===1)ws.send(e.data.pcm);};
+  srcNode.connect(workletNode);}
+
+function stopMic(){workletNode&&workletNode.disconnect();
+  micStream&&micStream.getTracks().forEach(t=>t.stop());
+  audioCtx&&audioCtx.close();workletNode=micStream=audioCtx=null;
+  $('meterFill').style.width='0%';}
+
+// ── memory panel ──
+function updateMemory(m){
+  $('mName').textContent=m.name||'—';$('mConsumer').textContent=m.consumer_no||'—';
+  $('mMobile').textContent=m.mobile||'—';
+  $('mLang').textContent={mr:'Marathi',hi:'Hindi',en:'English'}[m.language]||'—';
+  const v=$('mVerified');v.textContent=m.verified?'YES':'NO';v.className='badge '+(m.verified?'yes':'no');
+  if(m.complaints&&m.complaints.length){
+    $('complaints').innerHTML=m.complaints.map(c=>
+      `<div class="sr"><b>${c.sr_no}</b><br>${c.category}${c.eta_hours?` · ~${c.eta_hours}h`:''}</div>`).join('');}}
+
+// ── call lifecycle ──
+async function startCall(){
+  $('callBtn').disabled=true;
+  // Create (or resume) the AudioContext NOW, while we are still inside the
+  // click handler.  Any later creation (e.g. on first binary WS message) is
+  // outside the gesture window and will be silently suspended by the browser.
+  initPlayCtx();
+  if(playCtx.state==='suspended')await playCtx.resume();
+  try{await startMic();}catch(e){alert('Microphone access needed: '+e.message);$('callBtn').disabled=false;return;}
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(`${proto}://${location.host}/ws/call`);
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ws.send(JSON.stringify({type:'start',sample_rate:IN_RATE}));
+    onCall=true;$('callBtn').textContent='⏹ End Call';$('callBtn').className='oncall';
+    $('callBtn').disabled=false;$('textInput').disabled=false;setStatus('listening');};
+  ws.onmessage=e=>{
+    if(e.data instanceof ArrayBuffer){playChunk(e.data);return;}
+    const m=JSON.parse(e.data);
+    if(m.type==='user'){closeAgentMsg();addMsg('user',m.text);}
+    else if(m.type==='assistant')addMsg('agent',m.text);
+    else if(m.type==='state'){setStatus(m.value);if(m.value!=='speaking')closeAgentMsg();}
+    else if(m.type==='interrupted'){flushPlayback();closeAgentMsg();setStatus('listening');}
+    else if(m.type==='memory')updateMemory(m);};
+  ws.onclose=endCall;ws.onerror=endCall;}
+
+function endCall(){if(!onCall&&!ws)return;onCall=false;
+  try{ws&&ws.close();}catch(e){}ws=null;stopMic();flushPlayback();
+  // Close the playback context so the next call starts fresh.
+  if(playCtx){try{playCtx.close();}catch(e){}playCtx=null;playTime=0;}
+  $('callBtn').textContent='📞 Start Call';$('callBtn').className='';$('callBtn').disabled=false;
+  $('textInput').disabled=true;setStatus('idle');closeAgentMsg();}
+
+$('callBtn').onclick=()=>onCall?endCall():startCall();
+$('textInput').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.target.value.trim()&&ws&&ws.readyState===1){
+    flushPlayback();ws.send(JSON.stringify({type:'text',text:e.target.value.trim()}));
+    e.target.value='';}});
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+name: Knowledge question — grounded, no verification needed
+turns:
+  - user: "What is the discount if I pay my bill online?"
+    expect: {language: en, contains: ["0.25"], not_contains: ["verify", "consumer number"]}

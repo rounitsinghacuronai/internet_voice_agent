@@ -1,0 +1,39 @@
+id: safety_guidelines
+title: Electrical safety - do's, don'ts, emergencies
+category: safety
+kind: policy
+source: "Do & Don't for Safety; Safety Management for Consumers"
+version: "2026-07"
+language: en
+sections:
+  - title: Fallen wire or accident - immediate action
+    keywords: [wire down, तार तुटली, तार गिरा, fallen wire, emergency]
+    text: >
+      If a live wire has snapped or fallen, stay far away and keep everyone, especially
+      children and animals, away. Do not touch the wire or anything in contact with it.
+      Report immediately with the exact location to the nearest MSEDCL office or the
+      toll-free lines 1912, 19120, 1800-233-3435, 1800-102-3435. Field teams attend
+      snapped lines on priority - standard attendance is within 4 hours, immediate for
+      shock hazards.
+  - title: Electric shock rescue
+    keywords: [shock, करंट लगा, झटका, electrocution, rescue]
+    text: >
+      If someone is receiving an electric shock, switch off the main supply first. Never
+      touch the person with bare hands. Separate them from the source only with a dry
+      wooden stick or dry rope while standing on a dry surface. Call for medical help
+      immediately and report the incident to MSEDCL.
+  - title: Household electrical safety do's
+    keywords: [safety tips, earthing, ELCB, सुरक्षा]
+    text: >
+      Use proper earthing for the installation and appliances, install an ELCB/RCCB,
+      get wiring done by a licensed contractor, keep meter and switchboard areas dry,
+      and switch off the main during maintenance. Check insulation of wires near motor
+      terminals and pumps regularly, especially before monsoon.
+  - title: Household electrical safety don'ts
+    keywords: [donts, danger, टाळा, खतरा]
+    text: >
+      Do not hook wires onto MSEDCL lines (it is theft and lethal), do not tie cattle or
+      clotheslines to poles or stay wires, do not build or store material under lines,
+      do not use damaged plugs and frayed wires, do not operate switches with wet hands,
+      and never approach a transformer, feeder pillar or pole that is sparking, smoking
+      or leaking oil - report it instead.

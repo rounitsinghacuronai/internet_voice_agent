@@ -1,0 +1,18 @@
+id: theft
+title: Theft of electricity
+category: general
+kind: policy
+source: "Training Manual pp.86-89"
+version: "2026-07"
+language: en
+sections:
+  - title: Theft provisions and reporting
+    keywords: [theft, चोरी, hook, आकडा, unauthorized]
+    text: >
+      Unauthorized use of electricity is assessed under Section 126 of the Electricity
+      Act 2003; dishonest abstraction such as hooking onto lines, meter tampering or
+      bypass is theft under Section 135, and offences may be compounded under Section 152.
+      Theft can be reported anonymously - a Theft Related Complaint is registered and the
+      flying squad or vigilance team investigates. Never quote penalty amounts on a call;
+      assessment is done by the authorized officer. A live hook or exposed tap is also a
+      safety hazard - treat it with the safety fast-path.

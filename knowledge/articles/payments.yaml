@@ -1,0 +1,22 @@
+id: payments
+title: Bill payment modes and payment issues
+category: billing
+kind: article
+source: "Training Manual pp.40-45"
+version: "2026-07"
+language: en
+sections:
+  - title: Payment modes
+    keywords: [payment, pay bill, भरणा, भुगतान]
+    text: >
+      Bills can be paid online (mahadiscom.in or the mobile app - card, UPI, net banking,
+      wallets), by cash or cheque at collection centres, through ATP machines, RTGS/NEFT,
+      or ECS auto-debit. Digital payment earns a 0.25% discount capped at Rs 500.
+  - title: Payment not reflecting
+    keywords: [payment failed, debited, refund, reversal, पैसे कटले, पैसा कट गया]
+    text: >
+      A successful payment can take some time to reflect against the bill - nothing more
+      is needed. If a transaction failed but the amount was debited, it auto-reverses to
+      the same account in 5 to 7 working days - keep the transaction reference. If a
+      payment stays pending, banks may take up to a day; note the reference and check
+      payment history in the app or WSS.

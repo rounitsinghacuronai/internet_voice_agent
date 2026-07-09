@@ -1,0 +1,379 @@
+"""ConversationManager — the brain of one call.
+
+Turn flow:
+  user utterance (text + STT lang hint)
+    → memory.scan_user_text (slot extraction)
+    → LanguageEngine.update
+    → SafetyGate (deterministic) → emergency path if tripped
+    → compose system prompt (modules + language directive + memory block)
+    → Gemini stream; tool_calls → ToolRegistry (gated) → loop (max rounds)
+    → sentences streamed OUT as they complete (caller hears the first sentence
+      while the rest is still generating)
+
+The manager is transport-agnostic: it yields TurnChunk objects; the WS layer (or a
+future Exotel adapter, or the eval harness) consumes them.
+
+BARGE-IN SAFETY GUARANTEES (both handled here, not left to the transport layer):
+
+  1. EAGER MEMORY COMMITS — sentences are appended to memory.history the instant
+     they are generated, not after the whole turn completes. A barge-in mid-turn
+     therefore discards only the unspoken tail; the caller's heard context is never
+     lost.
+
+  2. SHIELDED TOOL CALLS — every backend tool dispatch (register_complaint, OTP
+     verification, etc.) is wrapped in asyncio.shield() so a barge-in CancelledError
+     cannot abort a write that is already in flight. If the outer task is cancelled
+     while a tool is executing, _late_tool_absorb() keeps the tool running in the
+     background and absorbs its result into memory when it finishes. The next turn
+     picks up the result from memory.history naturally.
+
+  3. LANGUAGE PERSISTENCE — LanguageEngine.update() runs before any LLM generation.
+     If the customer interrupted in a different language, memory.language is updated
+     before the very first token of the next response is generated.
+
+  4. TOPIC CONTINUITY — only the unspoken portion of the interrupted response is
+     discarded. Completed tool results, spoken sentences, and all memory slots are
+     preserved across barge-in events. The LLM context window reflects exactly what
+     the customer actually heard.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass
+from typing import AsyncIterator
+
+from ..config import Settings
+from ..prompts.loader import compose_system_prompt
+from ..providers.base import LLMProvider, ProviderError
+from ..tools.registry import ToolRegistry
+from . import safety
+from .language import LanguageEngine
+from .memory import CallMemory
+
+log = logging.getLogger(__name__)
+
+# Primary split: sentence-ending punctuation followed by space, or immediately
+# followed by the start of a new word (no space).
+# Secondary split: comma/दash pause — only fires when there is already a
+# meaningful chunk in the buffer (≥40 chars) so we don't create sub-second
+# clips.  This gets TTS started sooner on long single-sentence responses.
+_SENT_SPLIT = re.compile(
+    r"(?<=[.!?।؟])\s+"            # ". Next" or "? Next" with space
+    r"|(?<=[.!?।])(?=[^\s.!?।])"  # ".Next" no space (Hindi/Marathi run-on)
+)
+# Comma/pause split used only when buffer is long — avoids tiny clips.
+_PAUSE_SPLIT = re.compile(r"(?<=[,،—])\s+")
+# Yield a partial buffer at a comma only after this many chars. Kept high (160)
+# so short customer-care replies are synthesised as WHOLE sentences — splitting a
+# sentence into comma-delimited fragments makes each fragment a separate TTS call,
+# which resets prosody and produces the clipped, choppy, robotic delivery. A whole
+# sentence lets the voice carry natural intonation and emotion across it. Only a
+# genuinely long run-on sentence now splits early, and only for first-audio latency.
+_FORCE_FLUSH_CHARS = 160
+
+GREETING = "महावितरण ग्राहक सेवा केंद्रात आपले स्वागत आहे. मी प्रिया, आपली कशा प्रकारे मदत करू शकते?"
+
+_APOLOGY = {
+    "mr": "माफ करा, थोडी तांत्रिक अडचण आली. कृपया पुन्हा सांगाल का?",
+    "hi": "माफ़ कीजिए, थोड़ी तकनीकी दिक्कत आ गई. कृपया दोबारा बताइए?",
+    "en": "Sorry, I hit a small technical issue. Could you say that again?",
+}
+
+# Gentle re-prompt when the caller goes silent (spoken in the caller's language).
+_SILENCE_NUDGE = {
+    "mr": "हॅलो, आपण तिथे आहात का? मी आपली कशी मदत करू शकते?",
+    "hi": "हैलो, क्या आप वहाँ हैं? मैं आपकी कैसे मदद कर सकती हूँ?",
+    "en": "Hello, are you still there? How may I help you?",
+}
+
+# Final no-response announcement + official closing, per the training manual's
+# "NO RESPONSE" flow — spoken once before the call is disconnected.
+_NO_RESPONSE_CLOSING = {
+    "mr": "तुमच्याकडून कोणतेही प्रतिउत्तर न आल्यामुळे आपला कॉल डिस्कनेक्ट करण्यात येत आहे. महावितरणमध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो.",
+    "hi": "आपकी ओर से कोई प्रति-उत्तर न आने के कारण आपका कॉल डिस्कनेक्ट किया जा रहा है. महावितरण में संपर्क करने के लिए धन्यवाद. आपका दिन शुभ रहे.",
+    "en": "As there's no response from your side, this call is being disconnected. Thank you for calling Mahavitaran. Have a nice day.",
+}
+
+
+def _lang_for(memory_lang: str, table: dict) -> str:
+    """Pick a language key that exists in `table`, defaulting to Marathi
+    (the greeting language) before the caller has established one."""
+    return memory_lang if memory_lang in table else "mr"
+
+
+@dataclass
+class TurnChunk:
+    """One unit the transport speaks/displays. kind: sentence|done"""
+    kind: str
+    text: str = ""
+    language: str = "hi"
+
+
+class ConversationManager:
+    def __init__(self, settings: Settings, llm: LLMProvider, tools: ToolRegistry,
+                 session_id: str = ""):
+        self.s = settings
+        self.llm = llm
+        self.tools = tools
+        self.memory = CallMemory(session_id=session_id)
+        self.lang = LanguageEngine()
+        self.turn_no = 0
+
+    # ── public API ───────────────────────────────────────────────────────────
+    def greeting(self) -> TurnChunk:
+        self.memory.history.append({"role": "assistant", "content": GREETING})
+        return TurnChunk("sentence", GREETING, "mr")
+
+    def silence_nudge(self) -> TurnChunk:
+        """Gentle re-prompt spoken when the caller has gone silent."""
+        lang = _lang_for(self.memory.language, _SILENCE_NUDGE)
+        text = _SILENCE_NUDGE[lang]
+        self.memory.history.append({"role": "assistant", "content": text})
+        return TurnChunk("sentence", text, lang)
+
+    def no_response_closing(self) -> TurnChunk:
+        """Final announcement + official closing before disconnecting on no-response."""
+        lang = _lang_for(self.memory.language, _NO_RESPONSE_CLOSING)
+        text = _NO_RESPONSE_CLOSING[lang]
+        self.memory.history.append({"role": "assistant", "content": text})
+        return TurnChunk("sentence", text, lang)
+
+    async def run_turn(self, user_text: str, stt_lang: str = "unknown") -> AsyncIterator[TurnChunk]:
+        self.turn_no += 1
+        t0 = time.perf_counter()
+        user_text = user_text.strip()
+        if not user_text:
+            return
+
+        self.memory.scan_user_text(user_text)
+        active_lang = self.lang.update(user_text, stt_lang)
+        self.memory.language = active_lang
+        self.memory.history.append({"role": "user", "content": user_text})
+
+        # ── deterministic emergency fast-path ──
+        verdict = safety.assess(user_text)
+        if verdict.emergency:
+            async for chunk in self._emergency(verdict, user_text):
+                yield chunk
+            return
+
+        # ── normal LLM turn with tool loop ──
+        try:
+            async for chunk in self._llm_turn():
+                yield chunk
+        except asyncio.CancelledError:
+            # Barge-in cancelled this generator mid-stream.
+            # Memory already has what was spoken (eager commits below).
+            # Re-raise so the task exits cleanly — do NOT yield anything more.
+            log.info("turn %d: cancelled by barge-in (lang=%s)", self.turn_no, active_lang)
+            raise
+        except ProviderError as e:
+            log.error("turn failed: %s", e)
+            lang = active_lang if active_lang in _APOLOGY else "hi"
+            text = _APOLOGY[lang]
+            self.memory.history.append({"role": "assistant", "content": text})
+            yield TurnChunk("sentence", text, lang)
+
+        log.info("turn %d done in %.0f ms (lang=%s)", self.turn_no,
+                 (time.perf_counter() - t0) * 1000, active_lang)
+        yield TurnChunk("done")
+
+    # ── emergency path ───────────────────────────────────────────────────────
+    async def _emergency(self, verdict: safety.SafetyVerdict, user_text: str) -> AsyncIterator[TurnChunk]:
+        lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "hi"
+        line = safety.safety_line(verdict, lang)
+        yield TurnChunk("sentence", line, lang)                      # speak FIRST
+        location = self.memory.location or user_text[:120]
+        # Safety tools: shield so barge-in cannot abort these critical writes
+        await _shielded_dispatch(
+            self.tools, "log_safety_incident",
+            {"type": verdict.incident_type, "location": location}, self.memory,
+        )
+        await _shielded_dispatch(
+            self.tools, "transfer_to_human",
+            {"reason": "safety_emergency",
+             "context_summary": f"{verdict.incident_type}: {user_text[:150]}"},
+            self.memory,
+        )
+        follow = {
+            "mr": "आपत्कालीन टीमला कळवलं आहे, ते तातडीने पोहोचतील. नक्की ठिकाण सांगू शकाल का?",
+            "hi": "इमरजेंसी टीम को सूचना दे दी है, वे तुरंत पहुँचेंगे. सटीक जगह बता दीजिए?",
+            "en": "The emergency team has been alerted and is on its way. Can you confirm the exact location?",
+        }[lang]
+        self.memory.history.append({"role": "assistant", "content": f"{line} {follow}"})
+        yield TurnChunk("sentence", follow, lang)
+        yield TurnChunk("done")
+
+    # ── LLM turn with tool loop ──────────────────────────────────────────────
+    def _messages(self, knowledge_block: str = "") -> list[dict]:
+        system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
+                                       knowledge_block)
+        return [{"role": "system", "content": system},
+                *self.memory.trimmed_history(self.s.history_max_turns)]
+
+    async def _llm_turn(self) -> AsyncIterator[TurnChunk]:
+        knowledge_block = ""
+        scratch: list[dict] = []          # tool call/result messages within this turn
+        lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "hi"
+
+        for round_no in range(self.s.max_tool_rounds + 1):
+            messages = self._messages(knowledge_block) + scratch
+            buffer = ""
+            spoken: list[str] = []
+            tool_calls: list[dict] = []
+
+            async for delta in self.llm.stream_chat(messages, tools=self.tools.schemas):
+                if delta.text:
+                    buffer += delta.text
+                    # ── primary split: sentence-ending punctuation ──────────
+                    parts = _SENT_SPLIT.split(buffer)
+                    if len(parts) > 1:
+                        for sentence in parts[:-1]:
+                            sentence = _sanitize(sentence)
+                            if sentence:
+                                # EAGER COMMIT: sentence goes to history before TTS plays it
+                                # so a barge-in mid-stream never loses what was already heard.
+                                spoken.append(sentence)
+                                self.memory.history.append(
+                                    {"role": "assistant", "content": sentence}
+                                )
+                                yield TurnChunk("sentence", sentence, lang)
+                        buffer = parts[-1]
+                    # ── secondary split: comma/pause for long buffers ───────
+                    # If no sentence boundary found but buffer is long, split
+                    # at the last comma so TTS starts sooner.
+                    elif len(buffer) >= _FORCE_FLUSH_CHARS:
+                        pause_parts = _PAUSE_SPLIT.split(buffer)
+                        if len(pause_parts) > 1:
+                            # yield everything up to the last segment
+                            for segment in pause_parts[:-1]:
+                                segment = _sanitize(segment)
+                                if segment:
+                                    spoken.append(segment)
+                                    self.memory.history.append(
+                                        {"role": "assistant", "content": segment}
+                                    )
+                                    yield TurnChunk("sentence", segment, lang)
+                            buffer = pause_parts[-1]
+                if delta.finish:
+                    tool_calls = delta.tool_calls
+
+            tail = _sanitize(buffer)
+            if tail:
+                spoken.append(tail)
+                self.memory.history.append({"role": "assistant", "content": tail})
+                yield TurnChunk("sentence", tail, lang)
+
+            if not tool_calls:
+                # Note: sentences already committed individually above; no bulk append needed.
+                return
+
+            # ── tool execution — SHIELDED so barge-in cannot abort in-flight writes ──
+            assistant_msg: dict = {
+                "role": "assistant",
+                "content": " ".join(spoken) or None,
+                "tool_calls": tool_calls,
+            }
+            scratch.append(assistant_msg)
+
+            for call in tool_calls:
+                name = call["function"]["name"]
+                try:
+                    args = json.loads(call["function"]["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+
+                try:
+                    result = await _shielded_dispatch(
+                        self.tools, name, args, self.memory,
+                    )
+                except asyncio.CancelledError:
+                    # Outer task was cancelled (barge-in) while waiting for shield.
+                    # _shielded_dispatch already spawned a late-absorber background task.
+                    # Re-raise so the generator exits cleanly.
+                    log.info(
+                        "turn %d: barge-in during tool %s — late absorber running in background",
+                        self.turn_no, name,
+                    )
+                    raise
+
+                if name == "search_knowledge" and isinstance(result, dict):
+                    knowledge_block = result.get("context", "") or knowledge_block
+                scratch.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+
+            # spoken sentences for this round already committed above — nothing to bulk append
+
+        log.warning("max tool rounds hit — forcing spoken close")
+        fallback = _APOLOGY[lang]
+        self.memory.history.append({"role": "assistant", "content": fallback})
+        yield TurnChunk("sentence", fallback, lang)
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+async def _shielded_dispatch(
+    tools: ToolRegistry,
+    name: str,
+    args: dict,
+    memory: CallMemory,
+) -> dict:
+    """Dispatch a tool call inside asyncio.shield().
+
+    If the outer task is cancelled (barge-in), the tool keeps running in the
+    background. When it finishes, its result is absorbed into memory so the
+    next turn can use it.
+
+    Returns the result dict on success, or raises CancelledError (which the
+    caller should handle by re-raising to exit the generator cleanly).
+    """
+    tool_future: asyncio.Future = asyncio.ensure_future(
+        tools.dispatch(name, args, memory)
+    )
+    try:
+        return await asyncio.shield(tool_future)
+    except asyncio.CancelledError:
+        # Outer task cancelled; spawn a background absorber so the tool result
+        # is never lost even if this coroutine is being torn down.
+        asyncio.create_task(
+            _late_tool_absorb(tool_future, name, args, memory),
+            name=f"late_absorb_{name}",
+        )
+        raise
+
+
+async def _late_tool_absorb(
+    fut: asyncio.Future,
+    name: str,
+    args: dict,
+    memory: CallMemory,
+) -> None:
+    """Background task: wait for a shielded tool to finish, then absorb the result.
+
+    This runs after a barge-in cancels the main turn. The tool (e.g., register_complaint)
+    was already in flight — we let it complete and update memory so the next AI turn
+    can reference the result (e.g., "Your complaint SR-12345 has been registered").
+    """
+    try:
+        result = await fut
+        memory.absorb_tool_result(name, args, result)
+        log.info("late_absorb: tool '%s' finished post-barge-in → %s",
+                 name, str(result)[:120])
+    except asyncio.CancelledError:
+        log.warning("late_absorb: tool '%s' was also cancelled — result lost", name)
+    except Exception as e:
+        log.warning("late_absorb: tool '%s' failed post-barge-in: %s", name, e)
+
+
+def _sanitize(text: str) -> str:
+    """Strip anything unspeakable that slips through (markdown, labels)."""
+    text = re.sub(r"[*_#`]+", "", text)
+    text = re.sub(r"^\s*(?:[-•]|\d+[.)])\s*", "", text, flags=re.M)
+    return re.sub(r"\s+", " ", text).strip()

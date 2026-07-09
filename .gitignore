@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.en
+.venv/
+venv/
+backend/msedcl.db
+backend/app/audio/silero_vad.onnx
+knowledge/index/
+.pytest_cache/
+*.log
+.DS_Store
