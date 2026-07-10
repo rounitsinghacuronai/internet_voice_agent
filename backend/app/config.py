@@ -122,6 +122,21 @@ class Settings(BaseSettings):
     exotel_api_key: str = ""
     exotel_api_token: str = ""
 
+    # ── Human Speech Generation Engine + Voice Director ──
+    # Deterministic layer that turns raw LLM text into natural spoken dialogue
+    # (thought-groups, pauses, pacing, number pronunciation, de-AI cleanup)
+    # before it reaches Sarvam TTS. See backend/app/speech/. Reversible: set
+    # SPEECH_ENABLED=false to fall back to raw sentence → TTS.
+    speech_enabled: bool = True
+    # Optional micro-LLM restructuring pass (higher human-feel, adds latency and
+    # another failure mode). OFF by default to protect the speech-to-speech
+    # budget; the deterministic path already handles the real-time turn.
+    speech_llm_restructure: bool = False
+    # Per-utterance pace bounds (absolute Sarvam pace). The Voice Director's
+    # style pace multiplies Settings.tts_pace and is clamped into this range.
+    speech_pace_min: float = 0.7
+    speech_pace_max: float = 1.15
+
     # ── conversation ──
     max_tool_rounds: int = 4
     verify_ttl_s: int = 1800           # hard verify-gate window

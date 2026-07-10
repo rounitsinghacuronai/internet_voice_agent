@@ -559,9 +559,12 @@ class VoiceSession:
     async def _speak_sentence(self, chunk: TurnChunk) -> None:
         """Synthesize one sentence, stream PCM to client, feed AEC reference."""
         try:
-            await self._send({"type": "assistant", "text": chunk.text})
+            msg = {"type": "assistant", "text": chunk.text}
+            if chunk.style:
+                msg["style"] = chunk.style
+            await self._send(msg)
             await self._send({"type": "audio_start"})
-            async for pcm in self.deps.tts.synthesize(chunk.text, chunk.language):
+            async for pcm in self.deps.tts.synthesize(chunk.text, chunk.language, chunk.pace):
                 # Feed TTS PCM as AEC reference BEFORE sending to client so the
                 # reference buffer stays synchronised with what the speaker plays.
                 self.pipeline.feed_tts_reference(pcm, self.s.tts_sample_rate)

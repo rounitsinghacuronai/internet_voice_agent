@@ -71,9 +71,25 @@ Browser mic ──getUserMedia(AEC,AGC,NS)──► AudioWorklet ──PCM16 16k
                     │   ├─ PromptComposer  (modules + memory block + lang directive)
                     │   ├─ Gemini loop     (stream; tool_calls → Orchestrator, max 4 rounds)
                     │   └─ Orchestrator    (verify-gate, OTP-gate, RAG vs live-tool routing)
-                    ├─ SentenceStreamer (first sentence → TTS immediately)
-                    └─ Sarvam TTS ──PCM16 24k──► WS ──► browser playback queue
+                    ├─ SentenceStreamer (first sentence → Speech Engine immediately)
+                    ├─ Human Speech Engine + Voice Director  (per sentence, deterministic)
+                    │     ResponseOptimizer → VoiceDirector (style per turn) → HumanSpeechEngine
+                    │     → ProsodyPlanner → SarvamFormatter  ⇒ spoken text + per-utterance pace
+                    └─ Sarvam TTS(text, pace) ──PCM16 24k──► WS ──► browser playback queue
 ```
+
+### Human Speech Generation Engine (the "final quality layer")
+
+Between the LLM's streamed sentences and Sarvam sits a deterministic layer that
+turns *AI reading text* into *a human speaking*. The **Voice Director** assigns one
+style profile per turn (greeting / verification / outage / billing /
+complaint-registered / emergency / closing, plus caller-emotion adaptation); the
+**Human Speech Engine** then adds an active-listening lead-in and genuine
+hesitation (only when a lookup actually ran), groups long lines for breathing,
+plans pauses by meaning, formats long numbers digit-by-digit, and emits one Sarvam
+pace per utterance (slower for numbers, steadier for angry callers). Zero added
+latency; `SPEECH_ENABLED=false` reverts to raw sentence → TTS. Full write-up in
+`docs/HUMAN_SPEECH_ENGINE.md`.
 
 ## Latency budget (first audible response)
 
@@ -97,7 +113,12 @@ backend/app/
   audio/             vad.py (Silero), denoise.py, endpointing.py (FSM)
   providers/         base.py (interfaces), sarvam_stt.py, sarvam_tts.py,
                      gemini_llm.py, embeddings.py
-  conversation/      manager.py, memory.py, language.py, safety.py, orchestrator.py
+  conversation/      manager.py, memory.py, language.py, safety.py, numbers.py,
+                     robustness.py
+  speech/            Human Speech Engine + Voice Director (deterministic):
+                     pipeline.py (facade), director.py, profiles.py, engine.py,
+                     prosody.py, formatter.py, optimizer.py, numbers_speech.py,
+                     lexicon.py, variation.py, plan.py, evaluate.py
   prompts/           loader.py + modules/*.md (identity, style, language, tools,
                      memory, safety, escalation, closing, grounding)
   tools/             registry.py (schemas+gates), msedcl.py (14 services), seed.py
@@ -106,8 +127,8 @@ knowledge/
   articles/*.yaml    structured knowledge (authored from the manuals — no raw PDFs)
   ingestion/         extract_pdfs.py, build_index.py
 frontend/index.html  single-file call-center UI (worklet mic, WS, barge-in)
-evaluation/          run_eval.py + scenarios/*.yaml
-docs/                DEMO_SCENARIOS.md, PRODUCTION_CHECKLIST.md
+evaluation/          run_eval.py + scenarios/*.yaml, speech_naturalness.py (before/after)
+docs/                DEMO_SCENARIOS.md, PRODUCTION_CHECKLIST.md, HUMAN_SPEECH_ENGINE.md
 ```
 
 ## WS protocol (`/ws/call`)

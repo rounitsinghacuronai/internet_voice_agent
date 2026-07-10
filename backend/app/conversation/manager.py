@@ -49,6 +49,8 @@ from typing import AsyncIterator
 from ..config import Settings
 from ..prompts.loader import compose_system_prompt
 from ..providers.base import LLMProvider, ProviderError
+from ..speech.pipeline import SpeechDirector
+from ..speech.plan import SpeechContext, StyleName
 from ..tools.registry import ToolRegistry
 from . import safety
 from .language import LanguageEngine
@@ -108,10 +110,16 @@ def _lang_for(memory_lang: str, table: dict) -> str:
 
 @dataclass
 class TurnChunk:
-    """One unit the transport speaks/displays. kind: sentence|done"""
+    """One unit the transport speaks/displays. kind: sentence|done
+
+    `pace` is the per-utterance Sarvam pace planned by the Human Speech Engine
+    (None → provider default). `style` is the Voice Director's style label, for
+    telemetry / the client UI."""
     kind: str
     text: str = ""
     language: str = "hi"
+    pace: float | None = None
+    style: str = ""
 
 
 class ConversationManager:
@@ -125,25 +133,77 @@ class ConversationManager:
         self.topic = TopicStability()
         self.turn_no = 0
         self._last_confidence: ConfidenceEstimate | None = None
+        self._last_user_text = ""
+
+        # Human Speech Generation Engine + Voice Director. One instance per call
+        # (holds the anti-repetition VariationTracker). None → raw sentence → TTS.
+        self.speech: SpeechDirector | None = (
+            SpeechDirector(settings, llm) if getattr(settings, "speech_enabled", True) else None
+        )
+        # per-turn voicing state (reset at the start of each LLM turn)
+        self._turn_profile = None
+        self._turn_ctx: SpeechContext | None = None
+        self._turn_is_first = True
+        self._turn_processed = False
+        self._turn_complaints_before = 0
+
+    # ── speech-engine helpers ─────────────────────────────────────────────────
+    def _voice_fixed(self, text: str, lang: str, style: StyleName) -> TurnChunk:
+        """Voice a reviewed/fixed line (greeting, safety, apology, silence prompt):
+        Voice Director pace + Sarvam formatting only, wording untouched."""
+        if not self.speech:
+            return TurnChunk("sentence", text, lang)
+        plan = self.speech.render_fixed(text, lang, style)
+        return TurnChunk("sentence", plan.text, plan.language, pace=plan.pace, style=plan.style)
+
+    def _voice(self, sentence: str, lang: str) -> TurnChunk:
+        """Voice one generated sentence through the Human Speech Engine, using the
+        per-turn StyleProfile decided by the Voice Director on the first sentence."""
+        if not self.speech:
+            return TurnChunk("sentence", sentence, lang)
+        if self._turn_profile is None or self._turn_ctx is None:
+            ctx = self._build_speech_ctx(sentence)
+            self._turn_ctx = ctx
+            self._turn_profile = self.speech.direct(ctx)
+        ctx = self._turn_ctx
+        ctx.is_first_utterance = self._turn_is_first
+        ctx.processing = self._turn_processed
+        plan = self.speech.render(sentence, self._turn_profile, ctx)
+        self._turn_is_first = False
+        return TurnChunk("sentence", plan.text, plan.language, pace=plan.pace, style=plan.style)
+
+    def _build_speech_ctx(self, sentence: str) -> SpeechContext:
+        return SpeechContext(
+            language=self.memory.language,
+            turn_no=self.turn_no,
+            is_first_utterance=True,
+            verified=self.memory.verified,
+            asking_for_number=self.memory.field_requested_by(sentence),
+            just_registered_complaint=len(self.memory.complaints) > self._turn_complaints_before,
+            topic=self.topic.active,
+            confidence_tier=(self._last_confidence.tier.value if self._last_confidence else "high"),
+            processing=self._turn_processed,
+            user_text=self._last_user_text,
+        )
 
     # ── public API ───────────────────────────────────────────────────────────
     def greeting(self) -> TurnChunk:
         self.memory.history.append({"role": "assistant", "content": GREETING})
-        return TurnChunk("sentence", GREETING, "mr")
+        return self._voice_fixed(GREETING, "mr", StyleName.GREETING)
 
     def silence_nudge(self) -> TurnChunk:
         """Gentle re-prompt spoken when the caller has gone silent."""
         lang = _lang_for(self.memory.language, _SILENCE_NUDGE)
         text = _SILENCE_NUDGE[lang]
         self.memory.history.append({"role": "assistant", "content": text})
-        return TurnChunk("sentence", text, lang)
+        return self._voice_fixed(text, lang, StyleName.DEFAULT)
 
     def no_response_closing(self) -> TurnChunk:
         """Final announcement + official closing before disconnecting on no-response."""
         lang = _lang_for(self.memory.language, _NO_RESPONSE_CLOSING)
         text = _NO_RESPONSE_CLOSING[lang]
         self.memory.history.append({"role": "assistant", "content": text})
-        return TurnChunk("sentence", text, lang)
+        return self._voice_fixed(text, lang, StyleName.CLOSING)
 
     async def run_turn(
         self,
@@ -157,6 +217,7 @@ class ConversationManager:
         user_text = user_text.strip()
         if not user_text:
             return
+        self._last_user_text = user_text
 
         self.memory.scan_user_text(user_text)
         active_lang = self.lang.update(user_text, stt_lang)
@@ -191,7 +252,7 @@ class ConversationManager:
             lang = active_lang if active_lang in _APOLOGY else "hi"
             text = _APOLOGY[lang]
             self.memory.history.append({"role": "assistant", "content": text})
-            yield TurnChunk("sentence", text, lang)
+            yield self._voice_fixed(text, lang, StyleName.DEFAULT)
 
         # ── Number Recognition Engine: arm the buffer if the agent just asked
         # for a consumer/mobile/OTP/meter number, so a fragmented reply across
@@ -219,7 +280,7 @@ class ConversationManager:
     async def _emergency(self, verdict: safety.SafetyVerdict, user_text: str) -> AsyncIterator[TurnChunk]:
         lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "hi"
         line = safety.safety_line(verdict, lang)
-        yield TurnChunk("sentence", line, lang)                      # speak FIRST
+        yield self._voice_fixed(line, lang, StyleName.EMERGENCY)     # speak FIRST
         location = self.memory.location or user_text[:120]
         # Safety tools: shield so barge-in cannot abort these critical writes
         await _shielded_dispatch(
@@ -238,7 +299,7 @@ class ConversationManager:
             "en": "The emergency team has been alerted and is on its way. Can you confirm the exact location?",
         }[lang]
         self.memory.history.append({"role": "assistant", "content": f"{line} {follow}"})
-        yield TurnChunk("sentence", follow, lang)
+        yield self._voice_fixed(follow, lang, StyleName.EMERGENCY)
         yield TurnChunk("done")
 
     # ── LLM turn with tool loop ──────────────────────────────────────────────
@@ -256,6 +317,15 @@ class ConversationManager:
         knowledge_block = ""
         scratch: list[dict] = []          # tool call/result messages within this turn
         lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "hi"
+
+        # Reset per-turn voicing state. The Voice Director assigns ONE style for
+        # the whole turn (decided on the first spoken sentence) so the reply is
+        # delivered as a consistent performance, not sentence-by-sentence drift.
+        self._turn_profile = None
+        self._turn_ctx = None
+        self._turn_is_first = True
+        self._turn_processed = False
+        self._turn_complaints_before = len(self.memory.complaints)
 
         for round_no in range(self.s.max_tool_rounds + 1):
             messages = self._messages(knowledge_block) + scratch
@@ -278,7 +348,7 @@ class ConversationManager:
                                 self.memory.history.append(
                                     {"role": "assistant", "content": sentence}
                                 )
-                                yield TurnChunk("sentence", sentence, lang)
+                                yield self._voice(sentence, lang)
                         buffer = parts[-1]
                     # ── secondary split: comma/pause for long buffers ───────
                     # If no sentence boundary found but buffer is long, split
@@ -294,7 +364,7 @@ class ConversationManager:
                                     self.memory.history.append(
                                         {"role": "assistant", "content": segment}
                                     )
-                                    yield TurnChunk("sentence", segment, lang)
+                                    yield self._voice(segment, lang)
                             buffer = pause_parts[-1]
                 if delta.finish:
                     tool_calls = delta.tool_calls
@@ -303,7 +373,7 @@ class ConversationManager:
             if tail:
                 spoken.append(tail)
                 self.memory.history.append({"role": "assistant", "content": tail})
-                yield TurnChunk("sentence", tail, lang)
+                yield self._voice(tail, lang)
 
             if not tool_calls:
                 # Note: sentences already committed individually above; no bulk append needed.
@@ -346,12 +416,15 @@ class ConversationManager:
                     "content": json.dumps(result, ensure_ascii=False),
                 })
 
+            # A real lookup/tool ran this turn — the next spoken sentence may now
+            # use a genuine thinking lead-in ("Let me just check…"), never faked.
+            self._turn_processed = True
             # spoken sentences for this round already committed above — nothing to bulk append
 
         log.warning("max tool rounds hit — forcing spoken close")
         fallback = _APOLOGY[lang]
         self.memory.history.append({"role": "assistant", "content": fallback})
-        yield TurnChunk("sentence", fallback, lang)
+        yield self._voice_fixed(fallback, lang, StyleName.DEFAULT)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -410,7 +483,18 @@ async def _late_tool_absorb(
 
 
 def _sanitize(text: str) -> str:
-    """Strip anything unspeakable that slips through (markdown, labels)."""
+    """Strip anything unspeakable that slips through (markdown, labels).
+
+    Also strips parenthetical asides entirely. Observed in production: the model
+    sometimes writes a number/code out phonetically for natural speech, then adds
+    a parenthetical "written form" repeat right after it (e.g. "SR two six zero...
+    (SR260782D4E6)") — a habit from written text where a raw form in parens is
+    helpful, but here the TTS reads BOTH, so the caller hears the same complaint/
+    consumer/OTP number spoken twice in a row. Since nothing in a voice-only call
+    should ever need a parenthetical aside (there's no reader to skip past it),
+    dropping the content is always safe, not just a narrow fix for this one case.
+    """
+    text = re.sub(r"\([^)]*\)", " ", text)
     text = re.sub(r"[*_#`]+", "", text)
     text = re.sub(r"^\s*(?:[-•]|\d+[.)])\s*", "", text, flags=re.M)
     return re.sub(r"\s+", " ", text).strip()

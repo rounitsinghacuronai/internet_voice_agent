@@ -51,12 +51,12 @@ class SarvamTTS:
         self.client = client
         self._cache: OrderedDict[str, bytes] = OrderedDict()
 
-    def _key(self, text: str, lang: str) -> str:
-        raw = f"{text}|{lang}|{self.s.tts_speaker}|{self.s.tts_pace}|{self.s.tts_sample_rate}"
+    def _key(self, text: str, lang: str, pace: float) -> str:
+        raw = f"{text}|{lang}|{self.s.tts_speaker}|{pace}|{self.s.tts_sample_rate}"
         return hashlib.sha1(raw.encode()).hexdigest()
 
-    async def _synthesize_full(self, text: str, lang: str) -> bytes:
-        key = self._key(text, lang)
+    async def _synthesize_full(self, text: str, lang: str, pace: float) -> bytes:
+        key = self._key(text, lang, pace)
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
@@ -65,7 +65,7 @@ class SarvamTTS:
             "text": text,
             "target_language_code": _LANG_CODE.get(lang, "hi-IN"),
             "speaker": self.s.tts_speaker,
-            "pace": self.s.tts_pace,
+            "pace": pace,
             "speech_sample_rate": self.s.tts_sample_rate,
             "enable_preprocessing": True,
         }
@@ -94,10 +94,14 @@ class SarvamTTS:
             self._cache.popitem(last=False)
         return pcm
 
-    async def synthesize(self, text: str, language: str) -> AsyncIterator[bytes]:
+    async def synthesize(self, text: str, language: str,
+                         pace: float | None = None) -> AsyncIterator[bytes]:
+        """Synthesize one line. `pace` is the per-utterance pace planned by the
+        Human Speech Engine (Voice Director style pace, dropped for long
+        numbers); falls back to the global Settings.tts_pace when None."""
         text = text.strip()
         if not text:
             return
-        pcm = await self._synthesize_full(text, language)
+        pcm = await self._synthesize_full(text, language, pace or self.s.tts_pace)
         for i in range(0, len(pcm), _CHUNK):
             yield pcm[i : i + _CHUNK]

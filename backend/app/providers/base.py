@@ -35,8 +35,10 @@ class STTProvider(Protocol):
 
 @runtime_checkable
 class TTSProvider(Protocol):
-    def synthesize(self, text: str, language: str) -> AsyncIterator[bytes]:
-        """Yield PCM16 chunks at the configured output sample rate."""
+    def synthesize(self, text: str, language: str,
+                   pace: float | None = None) -> AsyncIterator[bytes]:
+        """Yield PCM16 chunks at the configured output sample rate. `pace` is an
+        optional per-utterance pace from the Human Speech Engine; None → global."""
         ...
 
 
