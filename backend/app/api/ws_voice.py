@@ -87,7 +87,10 @@ class VoiceSession:
 
         # Audio pipeline
         self._vad_base_threshold = self.s.vad_threshold
-        self.vad = SileroVAD(self.s.vad_threshold)
+        # Reuse the model loaded once at process startup (main.py) instead of
+        # reloading it per call — this used to block the event loop before the
+        # WebSocket even finished accepting (see audio/vad.py for detail).
+        self.vad = SileroVAD(self.s.vad_threshold, ort_session=getattr(deps, "vad_session", None))
         self.endpointer = Endpointer(self.s, self.vad)
         self.pipeline = AudioPipeline(self.s, self.session_id)
 

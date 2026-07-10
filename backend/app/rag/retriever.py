@@ -3,6 +3,7 @@ lexical-overlap rerank, confidence scoring, citations. Loads articles from YAML 
 startup; hot-reloadable via /kb/reload."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -73,8 +74,17 @@ class HybridRetriever:
         cat = category if category in ("billing", "safety", "complaints", "connections", "general") else None
 
         qv = (await self.embedder.embed([query]))[0]
-        dense = self.store.dense_search(qv, k * 3, cat)
-        sparse = self.store.sparse_search(query, k * 3, cat)
+        # PERFORMANCE: store.dense_search is a BLOCKING call when backed by QdrantStore
+        # (qdrant_client is synchronous — a real network round-trip inside this async
+        # function would otherwise stall the whole event loop, i.e. every other
+        # concurrent call's audio/WebSocket handling, for the RTT of this one lookup).
+        # sparse_search (BM25, pure Python) is also offloaded for the same reason under
+        # concurrent load. asyncio.to_thread keeps both stores' identical API working
+        # unchanged while running them off the event loop thread.
+        dense, sparse = await asyncio.gather(
+            asyncio.to_thread(self.store.dense_search, qv, k * 3, cat),
+            asyncio.to_thread(self.store.sparse_search, query, k * 3, cat),
+        )
 
         # Reciprocal Rank Fusion
         fused: dict[int, float] = {}
