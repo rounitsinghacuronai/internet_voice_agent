@@ -53,6 +53,7 @@ from ..tools.registry import ToolRegistry
 from . import safety
 from .language import LanguageEngine
 from .memory import CallMemory
+from .robustness import ConfidenceEstimate, TopicStability, estimate_confidence
 
 log = logging.getLogger(__name__)
 
@@ -121,7 +122,9 @@ class ConversationManager:
         self.tools = tools
         self.memory = CallMemory(session_id=session_id)
         self.lang = LanguageEngine()
+        self.topic = TopicStability()
         self.turn_no = 0
+        self._last_confidence: ConfidenceEstimate | None = None
 
     # ── public API ───────────────────────────────────────────────────────────
     def greeting(self) -> TurnChunk:
@@ -142,7 +145,13 @@ class ConversationManager:
         self.memory.history.append({"role": "assistant", "content": text})
         return TurnChunk("sentence", text, lang)
 
-    async def run_turn(self, user_text: str, stt_lang: str = "unknown") -> AsyncIterator[TurnChunk]:
+    async def run_turn(
+        self,
+        user_text: str,
+        stt_lang: str = "unknown",
+        peak_prob: float = 1.0,
+        language_confidence: float | None = None,
+    ) -> AsyncIterator[TurnChunk]:
         self.turn_no += 1
         t0 = time.perf_counter()
         user_text = user_text.strip()
@@ -153,6 +162,12 @@ class ConversationManager:
         active_lang = self.lang.update(user_text, stt_lang)
         self.memory.language = active_lang
         self.memory.history.append({"role": "user", "content": user_text})
+
+        # Robustness layer: composite confidence proxy (VAD peak-prob + Sarvam's
+        # language_probability — there is no true per-word STT confidence) and
+        # topic-stability tracking, both feed the system prompt for this turn.
+        self._last_confidence = estimate_confidence(peak_prob, language_confidence)
+        self.topic.update(user_text)
 
         # ── deterministic emergency fast-path ──
         verdict = safety.assess(user_text)
@@ -178,9 +193,27 @@ class ConversationManager:
             self.memory.history.append({"role": "assistant", "content": text})
             yield TurnChunk("sentence", text, lang)
 
+        # ── Number Recognition Engine: arm the buffer if the agent just asked
+        # for a consumer/mobile/OTP/meter number, so a fragmented reply across
+        # multiple pauses gets merged instead of handled turn-by-turn.
+        self._arm_number_collection_if_asked()
+
         log.info("turn %d done in %.0f ms (lang=%s)", self.turn_no,
                  (time.perf_counter() - t0) * 1000, active_lang)
         yield TurnChunk("done")
+
+    def _arm_number_collection_if_asked(self) -> None:
+        last_assistant = next(
+            (m["content"] for m in reversed(self.memory.history)
+             if m.get("role") == "assistant" and m.get("content")),
+            None,
+        )
+        if not last_assistant:
+            return
+        field_name = self.memory.field_requested_by(last_assistant)
+        if field_name:
+            self.memory.start_number_collection(field_name)
+            log.info("turn %d: armed number collection for '%s'", self.turn_no, field_name)
 
     # ── emergency path ───────────────────────────────────────────────────────
     async def _emergency(self, verdict: safety.SafetyVerdict, user_text: str) -> AsyncIterator[TurnChunk]:
@@ -210,8 +243,12 @@ class ConversationManager:
 
     # ── LLM turn with tool loop ──────────────────────────────────────────────
     def _messages(self, knowledge_block: str = "") -> list[dict]:
+        confidence_directive = self._last_confidence.directive() if self._last_confidence else ""
+        directives = "\n\n".join(
+            d for d in (confidence_directive, self.topic.directive()) if d
+        )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
-                                       knowledge_block)
+                                       knowledge_block, directives)
         return [{"role": "system", "content": system},
                 *self.memory.trimmed_history(self.s.history_max_turns)]
 

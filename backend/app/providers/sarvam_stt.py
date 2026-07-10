@@ -55,4 +55,5 @@ class SarvamSTT:
             text=(body.get("transcript") or "").strip(),
             language=body.get("language_code") or "unknown",
             raw=body,
+            language_confidence=body.get("language_probability"),
         )

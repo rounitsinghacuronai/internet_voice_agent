@@ -21,8 +21,10 @@ def _static_modules() -> str:
 
 
 def compose_system_prompt(language_directive: str, memory_block: str,
-                          knowledge_block: str = "") -> str:
+                          knowledge_block: str = "", confidence_directive: str = "") -> str:
     sections = [_static_modules(), language_directive, memory_block]
+    if confidence_directive:
+        sections.append(confidence_directive)
     if knowledge_block:
         sections.append("[KNOWLEDGE CONTEXT — grounded facts for this turn]\n" + knowledge_block)
     return "\n\n".join(s for s in sections if s)

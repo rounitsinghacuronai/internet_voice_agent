@@ -61,6 +61,7 @@ from ..audio.vad import SileroVAD
 from ..barge_in.manager import InterruptionManager
 from ..config import Settings
 from ..conversation.manager import ConversationManager, TurnChunk
+from ..conversation.numbers import looks_like_number_fragment
 from ..conversation.state import CallState, CallStateMachine
 
 log = logging.getLogger(__name__)
@@ -221,7 +222,7 @@ class VoiceSession:
             if event.type is EventType.SPEECH_START:
                 await self._on_speech_start()
             elif event.type is EventType.UTTERANCE:
-                await self._on_utterance(event.pcm16)
+                await self._on_utterance(event.pcm16, event.peak_prob)
 
         # DIAGNOSTIC: while the agent is speaking, surface how high the caller's
         # VAD probability climbs. If this stays well below the interrupt
@@ -274,7 +275,7 @@ class VoiceSession:
         else:
             log.info("session %s: barge-in suppressed by cooldown/debounce", self.session_id)
 
-    async def _on_utterance(self, pcm16: bytes) -> None:
+    async def _on_utterance(self, pcm16: bytes, peak_prob: float = 1.0) -> None:
         """Full utterance available — launch a handler task."""
         # Caller responded — reset the silence watchdog.
         self._last_activity = time.monotonic()
@@ -283,7 +284,7 @@ class VoiceSession:
             self._active_turn_task = None
 
         task = asyncio.create_task(
-            self._handle_utterance(pcm16),
+            self._handle_utterance(pcm16, peak_prob),
             name=f"utt_{self.session_id}_{self.manager.turn_no + 1}",
         )
         self._active_turn_task = task
@@ -328,7 +329,7 @@ class VoiceSession:
 
     # ── utterance handling ───────────────────────────────────────────────────
 
-    async def _handle_utterance(self, pcm16: bytes) -> None:
+    async def _handle_utterance(self, pcm16: bytes, peak_prob: float = 1.0) -> None:
         """AGC→AEC→SpectralGate→denoise→SpeakerVerify → STT → run_turn.
 
         The whole coroutine is cancellable (barge-in can fire again here).
@@ -389,10 +390,30 @@ class VoiceSession:
                 await self._send({"type": "state", "value": "listening"})
                 return
 
+            # ── Number Recognition Engine: if the agent is mid-collection of a
+            # consumer/mobile/OTP/meter number and this utterance looks like a
+            # bare fragment of one, buffer it instead of running a full LLM
+            # turn on a partial number. Only surfaces to the LLM once the
+            # complete, validated number is assembled — see conversation/numbers.py.
+            memory = self.manager.memory
+            if memory.number_buffer.active and looks_like_number_fragment(tr.text):
+                digits, complete = memory.feed_number_fragment(tr.text)
+                log.info(
+                    "session %s: number fragment for '%s' → %r (complete=%s)",
+                    self.session_id, memory.number_buffer.field or "(just completed)",
+                    digits, complete,
+                )
+                if not complete:
+                    # Keep listening silently — do not send a partial number to
+                    # the LLM, and do not ask the caller to repeat anything.
+                    self.sm.transition(CallState.LISTENING, "number_fragment_buffered")
+                    await self._send({"type": "state", "value": "listening"})
+                    return
+
             await self._send({"type": "user", "text": tr.text, "lang": tr.language})
 
             try:
-                await self._run_turn(tr.text, tr.language)
+                await self._run_turn(tr.text, tr.language, peak_prob, tr.language_confidence)
             except asyncio.CancelledError:
                 log.info("session %s: turn interrupted after STT (turn %d)",
                          self.session_id, self.manager.turn_no)
@@ -442,7 +463,10 @@ class VoiceSession:
 
     # ── turn execution ────────────────────────────────────────────────────────
 
-    async def _run_turn(self, text: str, stt_lang: str) -> None:
+    async def _run_turn(
+        self, text: str, stt_lang: str,
+        peak_prob: float = 1.0, language_confidence: float | None = None,
+    ) -> None:
         """One full AI turn: LLM generation + TTS streaming.
 
         Barge-in safety:
@@ -459,7 +483,9 @@ class VoiceSession:
 
             async def produce() -> None:
                 try:
-                    async for chunk in self.manager.run_turn(text, stt_lang):
+                    async for chunk in self.manager.run_turn(
+                        text, stt_lang, peak_prob, language_confidence
+                    ):
                         await queue.put(chunk)
                 except asyncio.CancelledError:
                     log.debug("session %s: producer cancelled", self.session_id)

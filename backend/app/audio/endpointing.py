@@ -27,6 +27,10 @@ class EventType(Enum):
 class AudioEvent:
     type: EventType
     pcm16: bytes = b""
+    # Peak VAD speech-probability observed across this utterance. Used as a
+    # proxy for audio clarity/confidence downstream (Sarvam has no per-word
+    # transcription confidence) — see conversation/robustness.py.
+    peak_prob: float = 0.0
 
 
 class Endpointer:
@@ -118,4 +122,4 @@ class Endpointer:
         pcm16 = (np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes()
         log.info("utterance flushed: %.1fs (peak prob %.2f)",
                  len(audio) / self.s.input_sample_rate, peak_prob)
-        return [AudioEvent(EventType.UTTERANCE, pcm16)]
+        return [AudioEvent(EventType.UTTERANCE, pcm16, peak_prob=peak_prob)]

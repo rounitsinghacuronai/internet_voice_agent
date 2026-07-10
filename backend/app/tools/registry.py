@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from ..config import Settings
 from ..conversation.memory import CallMemory
+from ..conversation.numbers import EXPECTED_LENGTHS
 from .msedcl import MsedclServices
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,38 @@ _OTP_TOOLS = {"request_name_change", "request_load_change"}
 _UNGATED = {"verify_consumer", "send_otp", "verify_otp", "get_new_connection_status",
             "get_tariff_info", "track_complaint", "log_safety_incident",
             "transfer_to_human", "search_knowledge"}
+
+# Number Recognition Engine hard gate: these tools take a number-type argument
+# that must be complete and well-formed before the backend is ever called.
+# Prevents the LLM from calling verify_consumer/send_otp/verify_otp with a
+# partial number fragment (e.g. mid-collection, or a garbled STT read) —
+# "Never trigger verification until the full number has been collected."
+_NUMBER_ARG_FIELDS: dict[str, dict[str, str]] = {
+    # tool name → {arg name: number-type key in EXPECTED_LENGTHS}
+    "verify_consumer": {"consumer_no": "consumer_no", "mobile": "mobile"},
+    "send_otp": {"mobile": "mobile"},
+    "verify_otp": {"mobile": "mobile", "otp": "otp"},
+}
+
+
+def _validate_number_args(name: str, args: dict) -> str | None:
+    """Return an error message if a number-type argument is present but the
+    wrong length (partial/garbled), else None. Absent args are fine — some
+    tools accept EITHER consumer_no OR mobile."""
+    fields = _NUMBER_ARG_FIELDS.get(name)
+    if not fields:
+        return None
+    for arg_name, kind in fields.items():
+        val = args.get(arg_name)
+        if not val:
+            continue
+        digits = "".join(ch for ch in str(val) if ch.isdigit())
+        expected = EXPECTED_LENGTHS.get(kind)
+        if expected is not None and len(digits) != expected:
+            return (f"Refused: {arg_name} has {len(digits)} digits, expected {expected}. "
+                     "This looks like a partial or misheard number — collect the complete "
+                     "number from the caller before calling this tool again.")
+    return None
 
 
 def _fn(name: str, desc: str, props: dict, required: list[str] | None = None) -> dict:
@@ -115,6 +148,11 @@ class ToolRegistry:
         fn = self._map.get(name)
         if fn is None:
             return {"error": f"unknown_tool:{name}"}
+
+        # ── number-format gate (Number Recognition Engine) ──
+        if (err := _validate_number_args(name, args)) is not None:
+            log.warning("tool %s refused: %s", name, err)
+            return {"error": "invalid_number_format", "message": err}
 
         # ── hard gates ──
         if name in _WRITE_TOOLS and name not in _UNGATED:
