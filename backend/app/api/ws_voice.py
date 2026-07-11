@@ -95,7 +95,13 @@ class VoiceSession:
             self.s.vad_threshold, ort_session=getattr(deps, "vad_session", None)
         )
         self.endpointer = Endpointer(self.s, self.vad)
-        self.pipeline = AudioPipeline(self.s, self.session_id)
+        # Voice locking: on a phone leg (Exotel) the audio environment is stable,
+        # so lock onto the caller's voice; browser mics keep the config default.
+        is_telephony = bool(getattr(ws, "is_telephony", False))
+        self.pipeline = AudioPipeline(
+            self.s, self.session_id,
+            force_speaker_verify=True if is_telephony else None,
+        )
 
         # State machine — single source of truth for what the call is doing
         self.sm = CallStateMachine(session_id=self.session_id)
@@ -148,6 +154,10 @@ class VoiceSession:
         # into the mic and self-triggers barge-in. We suppress barge-in for the
         # greeting only (see _on_speech_start); normal barge-in resumes after.
         self._greeting_active: bool = False
+
+        # Per-turn latency breakdown (utterance → first audio byte), logged once
+        # per turn so slow stages are visible in production.
+        self._lat: dict = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -232,6 +242,15 @@ class VoiceSession:
         # The base threshold is restored as soon as TTS ends.
         boost = self.s.bargein_vad_threshold_boost if is_speaking else 0.0
         self.vad.threshold = self._vad_base_threshold + boost
+
+        # ADAPTIVE ENDPOINTING: while a number is being collected, callers pause
+        # between digit groups — allow a longer silence before ending the
+        # utterance. Normal turns keep the fast cutoff for snappy replies.
+        self.endpointer.end_silence_ms = (
+            self.s.vad_end_silence_number_ms
+            if self.manager.memory.number_buffer.active
+            else self.s.vad_end_silence_ms
+        )
 
         for event in self.endpointer.feed(pcm16, speaking=is_speaking):
             if event.type is EventType.SPEECH_START:
@@ -370,6 +389,7 @@ class VoiceSession:
         the caller appears to be ignored.
         """
         try:
+            self._lat = {"t0": time.monotonic()}
             # Run CPU-bound audio processing (AGC → AEC → SpectralGate →
             # noisereduce) in a thread so the event loop stays free to keep
             # receiving mic frames.  Without this, a 3-4 s utterance causes
@@ -379,6 +399,7 @@ class VoiceSession:
             result = await loop.run_in_executor(
                 _AUDIO_EXECUTOR, self.pipeline.process_utterance, pcm16
             )
+            self._lat["pipe_ms"] = (time.monotonic() - self._lat["t0"]) * 1000
             if result.suppressed:
                 log.info(
                     "session %s: utterance suppressed — %s",
@@ -394,8 +415,10 @@ class VoiceSession:
             await self._send({"type": "state", "value": "thinking"})
 
             # STT — cancellable; second barge-in during STT just exits cleanly
+            t_stt = time.monotonic()
             try:
                 tr = await self.deps.stt.transcribe(pcm16, self.s.input_sample_rate)
+                self._lat["stt_ms"] = (time.monotonic() - t_stt) * 1000
             except asyncio.CancelledError:
                 log.info("session %s: STT cancelled (second barge-in)", self.session_id)
                 self.sm.transition(CallState.LISTENING, "stt_cancelled")
@@ -604,6 +627,7 @@ class VoiceSession:
                 msg["style"] = chunk.style
             await self._send(msg)
             await self._send({"type": "audio_start"})
+            t_tts = time.monotonic()
             async for pcm in self.deps.tts.synthesize(
                 chunk.text, chunk.language, chunk.pace
             ):
@@ -612,6 +636,7 @@ class VoiceSession:
                 self.pipeline.feed_tts_reference(pcm, self.s.tts_sample_rate)
                 await self.ws.send_bytes(pcm)
                 self._advance_playhead(pcm)
+                self._log_first_audio_latency(t_tts)
             await self._send({"type": "audio_end"})
         except asyncio.CancelledError:
             try:
@@ -749,6 +774,29 @@ class VoiceSession:
             self.pipeline.notify_tts_ended()
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _log_first_audio_latency(self, t_tts_start: float) -> None:
+        """Log the per-stage breakdown once, on the first audio byte of a turn.
+
+        pipe = audio cleanup, stt = Sarvam transcription, llm = end of STT →
+        first complete sentence out of Gemini, tts = first sentence → first PCM
+        byte, total = caller stopped being heard → caller starts hearing us
+        (excludes the end-of-speech silence hangover, which adds
+        vad_end_silence_ms on top)."""
+        lat = self._lat
+        if not lat or "t0" not in lat or "logged" in lat or "stt_ms" not in lat:
+            return
+        lat["logged"] = True
+        now = time.monotonic()
+        total = (now - lat["t0"]) * 1000
+        tts_ms = (now - t_tts_start) * 1000
+        llm_ms = total - lat.get("pipe_ms", 0) - lat["stt_ms"] - tts_ms
+        log.info(
+            "session %s: latency pipe=%.0f stt=%.0f llm=%.0f tts=%.0f | "
+            "utterance→first-audio=%.0fms (+%dms endpoint hangover)",
+            self.session_id, lat.get("pipe_ms", 0), lat["stt_ms"],
+            max(llm_ms, 0), tts_ms, total, int(self.endpointer.end_silence_ms),
+        )
 
     def _advance_playhead(self, pcm: bytes) -> None:
         """Advance the server's copy of the client playback clock as PCM is sent.

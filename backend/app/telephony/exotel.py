@@ -97,6 +97,11 @@ _CHUNK_S = 0.4
 class ExotelTransport:
     """Adapts a raw Exotel Voicebot WebSocket to the VoiceSession `ws` interface."""
 
+    #: Marks this session as a phone call. VoiceSession uses it to auto-enable
+    #: voice locking (speaker verification) — reliable on a phone leg, unlike
+    #: browser mics.
+    is_telephony = True
+
     #: TTS PCM handed to send_bytes is at this rate (Sarvam Bulbul default 24 kHz).
     def __init__(self, ws: WebSocket, settings: Settings):
         self.ws = ws

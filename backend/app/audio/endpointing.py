@@ -37,6 +37,10 @@ class Endpointer:
     def __init__(self, settings: Settings, vad: SileroVAD):
         self.s = settings
         self.vad = vad
+        # Dynamic end-of-speech hangover. ws_voice raises it to
+        # vad_end_silence_number_ms while a number is being collected (callers
+        # pause between digit groups); normal turns use the snappier default.
+        self.end_silence_ms: float = settings.vad_end_silence_ms
         self._buf = np.empty(0, dtype=np.float32)       # unconsumed samples
         self._utt: list[np.ndarray] = []                # frames of current utterance
         self._in_speech = False
@@ -93,7 +97,7 @@ class Endpointer:
             if self._in_speech:
                 self._silence_ms += self.frame_ms
                 self._utt.append(frame)  # keep trailing silence — helps STT
-                if self._silence_ms >= self.s.vad_end_silence_ms:
+                if self._silence_ms >= self.end_silence_ms:
                     events.extend(self._flush())
             # pure silence outside speech: drop
 

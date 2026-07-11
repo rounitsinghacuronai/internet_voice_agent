@@ -65,10 +65,19 @@ class AudioPipeline:
     AEC reference buffer) is scoped to the session and reset on disconnect.
     """
 
-    def __init__(self, settings: Settings, session_id: str = "") -> None:
+    def __init__(self, settings: Settings, session_id: str = "",
+                 force_speaker_verify: bool | None = None) -> None:
+        """`force_speaker_verify` overrides Settings.speaker_verify_enabled for
+        this session. Telephony (Exotel) passes True: a phone leg is the stable,
+        single-channel environment the MFCC verifier was designed for, so the
+        agent LOCKS onto the caller's voice after enrollment and ignores
+        background speakers / TV. Browser-mic sessions keep the config default
+        (off) because mic/room variation causes false rejections there."""
         self.s = settings
         self.session_id = session_id
         self._tts_active = False
+        verify_on = (settings.speaker_verify_enabled
+                     if force_speaker_verify is None else force_speaker_verify)
 
         # ── AGC ──
         self.agc = AGC(
@@ -96,14 +105,17 @@ class AudioPipeline:
         # ── noisereduce (existing denoiser, per-utterance) ──
         self.denoiser = Denoiser(settings.denoise_enabled, settings.input_sample_rate)
 
-        # ── Speaker verifier ──
+        # ── Speaker verifier (voice locking) ──
         self.verifier = SpeakerVerifier(
             sample_rate=settings.input_sample_rate,
             n_enrollment_utterances=settings.speaker_verify_enrollment_utterances,
             similarity_threshold=settings.speaker_verify_threshold,
             rejection_ratio=settings.speaker_verify_rejection_ratio,
-            enabled=settings.speaker_verify_enabled,
-        ) if settings.speaker_verify_enabled else None
+            enabled=True,
+        ) if verify_on else None
+        if verify_on:
+            log.info("session %s: voice locking ON (enrolls over %d utterances)",
+                     session_id, settings.speaker_verify_enrollment_utterances)
 
     # ── TTS reference (called every time a TTS PCM chunk is sent) ───────────
 
