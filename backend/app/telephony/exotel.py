@@ -41,6 +41,7 @@ import binascii
 import json
 import logging
 import re
+import time
 
 from fastapi import APIRouter, WebSocket
 
@@ -80,6 +81,18 @@ _MULTIPLE = 320
 _MIN_SEND = 3200      # spec floor — don't send jittery sub-100 ms packets
 _MAX_SEND = 32000     # raw bytes; ~43 kB after base64, well under the 100 kB cap
 
+# PACING — the critical fix for "call connects then Exotel cancels instantly".
+# Exotel's platform expects audio roughly in real time (their own echobot paces
+# chunks with explicit delays). Our TTS produces a whole sentence at once, so
+# without pacing the 6-second greeting hit Exotel as one instant burst and the
+# platform cancelled the stream within the same second. We therefore never run
+# more than _LEAD_S seconds ahead of real-time playback: enough headroom that
+# the caller never hears a gap, small enough that Exotel is never flooded —
+# and barge-in `clear` only ever has ≲1 s of buffered audio to discard.
+_LEAD_S = 1.0
+# Per-message audio duration. Small messages also make `clear` act instantly.
+_CHUNK_S = 0.4
+
 
 class ExotelTransport:
     """Adapts a raw Exotel Voicebot WebSocket to the VoiceSession `ws` interface."""
@@ -111,6 +124,10 @@ class ExotelTransport:
         self._out_seq = 0
         self._out_buf = bytearray()   # pending outbound PCM at leg_rate
         self._closed = False
+
+        # outbound pacing state (see _LEAD_S above)
+        self._pace_t0: float | None = None   # monotonic anchor of current burst
+        self._sent_s = 0.0                   # seconds of audio sent since anchor
 
     # ── VoiceSession-facing interface ──────────────────────────────────────────
 
@@ -260,13 +277,14 @@ class ExotelTransport:
 
     async def _flush_out(self, force: bool) -> None:
         buf = self._out_buf
-        while len(buf) >= _MIN_SEND:
-            n = min(len(buf), _MAX_SEND)
-            n -= n % _MULTIPLE
-            if n == 0:
-                break
-            chunk = bytes(buf[:n])
-            del buf[:n]
+        # time-based message size: ~_CHUNK_S of audio per message, 320-aligned,
+        # never above the spec ceiling.
+        per_msg = min(_MAX_SEND, int(_CHUNK_S * self.leg_rate * 2))
+        per_msg -= per_msg % _MULTIPLE
+        per_msg = max(per_msg, _MIN_SEND)
+        while len(buf) >= max(_MIN_SEND, per_msg):
+            chunk = bytes(buf[:per_msg])
+            del buf[:per_msg]
             await self._send_media(chunk)
         if force and buf:
             n = len(buf)
@@ -275,8 +293,25 @@ class ExotelTransport:
             buf.clear()
             await self._send_media(chunk)
 
+    async def _pace(self, chunk_s: float) -> None:
+        """Sleep just enough that we never run more than _LEAD_S seconds of audio
+        ahead of real-time playback. Cancellable — a barge-in cancels the speaker
+        task mid-sleep and the un-sent tail is simply dropped."""
+        now = time.monotonic()
+        if self._pace_t0 is None or self._sent_s - (now - self._pace_t0) < 0:
+            # fresh burst, or playback already caught up — re-anchor
+            self._pace_t0 = now
+            self._sent_s = 0.0
+        ahead = self._sent_s - (now - self._pace_t0)
+        if ahead > _LEAD_S:
+            await asyncio.sleep(ahead - _LEAD_S)
+        self._sent_s += chunk_s
+
     async def _send_media(self, pcm: bytes) -> None:
         if self._closed or self.stream_sid is None:
+            return
+        await self._pace(len(pcm) / 2.0 / self.leg_rate)
+        if self._closed:
             return
         self._out_seq += 1
         msg = {
@@ -293,6 +328,8 @@ class ExotelTransport:
     async def _send_clear(self) -> None:
         """Barge-in: drop our buffered tail AND tell Exotel to stop playing."""
         self._out_buf.clear()
+        self._pace_t0 = None                 # reset pacing for the next reply
+        self._sent_s = 0.0
         if self._closed or self.stream_sid is None:
             return
         try:
