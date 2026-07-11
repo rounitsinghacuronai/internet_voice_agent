@@ -78,16 +78,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error("KB build failed (%s) — continuing without knowledge", e)
 
-    # PERFORMANCE: pre-warm the greeting TTS so the very first call doesn't pay
-    # a live Sarvam round-trip before the caller hears anything — populates
-    # SarvamTTS's LRU cache (see providers/sarvam_tts.py) with the exact
-    # greeting text/language/speaker/pace combination used at call start.
+    # PERFORMANCE: pre-warm fixed lines (greeting, silence nudge, apology) so no
+    # call ever pays a live Sarvam round-trip for them. Rendered through the SAME
+    # SpeechDirector path a live call uses, so the cache key (exact text + pace)
+    # is guaranteed to match at runtime.
     try:
-        async for _ in tts.synthesize(GREETING, "mr"):
-            pass
-        log.info("Greeting TTS pre-warmed")
+        from .conversation.manager import _APOLOGY, _SILENCE_NUDGE
+        from .speech.pipeline import SpeechDirector
+        from .speech.plan import StyleName
+
+        fixed_lines = [(GREETING, "mr", StyleName.GREETING),
+                       (_SILENCE_NUDGE["mr"], "mr", StyleName.DEFAULT),
+                       (_APOLOGY["mr"], "mr", StyleName.DEFAULT)]
+        if settings.speech_enabled:
+            director = SpeechDirector(settings)
+            to_warm = [(p.text, p.language, p.pace) for p in
+                       (director.render_fixed(t, lang, st) for t, lang, st in fixed_lines)]
+        else:
+            to_warm = [(t, lang, None) for t, lang, _ in fixed_lines]
+        for text, lang, pace in to_warm:
+            async for _ in tts.synthesize(text, lang, pace):
+                pass
+        log.info("Fixed-line TTS pre-warmed (%d lines)", len(to_warm))
     except Exception as e:
-        log.warning("Greeting TTS pre-warm failed (%s) — first call will synthesize live", e)
+        log.warning("TTS pre-warm failed (%s) — first call will synthesize live", e)
 
     log.info("Mahavitaran Voice up — model=%s stt=%s tts=%s kb_chunks=%d exotel=%s@%dHz",
              settings.gemini_model, settings.stt_model, settings.tts_model,

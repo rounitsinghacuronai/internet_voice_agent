@@ -61,10 +61,10 @@ class SarvamFormatter:
             last = i == n - 1
             pause = seg.pause or (PauseType.COMPLETION if last else PauseType.TRANSITION)
 
-            # honour a scale: roomier styles suspend a beat, tighter ones tighten
-            if profile.pause_scale >= 1.2 and pause is PauseType.BREATH:
-                token = "… "
-            elif profile.pause_scale <= 0.95 and pause in (PauseType.THINKING, PauseType.EMPATHY):
+            # honour a scale: tighter styles tighten suspended beats. (Roomier
+            # styles used to promote BREATH commas to "…", but a mid-sentence
+            # ellipsis makes Bulbul drawl unnaturally — a comma already breathes.)
+            if profile.pause_scale <= 0.95 and pause in (PauseType.THINKING, PauseType.EMPATHY):
                 token = ", "
             else:
                 token = _TOKEN.get(pause, ". ")

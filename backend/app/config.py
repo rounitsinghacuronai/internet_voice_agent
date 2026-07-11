@@ -42,7 +42,14 @@ class Settings(BaseSettings):
     input_sample_rate: int = 16000
     vad_threshold: float = 0.4
     vad_min_speech_ms: int = 150       # speech shorter than this = noise blip
-    vad_end_silence_ms: int = 650      # hangover before end-of-speech fires
+    # Hangover before end-of-speech fires. This silence sits at the FRONT of every
+    # single response (caller stops → we wait this long → STT even starts), so it is
+    # the largest fixed contributor to perceived latency. 500 ms keeps turn-taking
+    # snappy; the cross-utterance NumberBuffer (conversation/numbers.py) already
+    # absorbs the long thinking-pauses callers take while dictating numbers, so the
+    # old 650 ms safety margin is no longer needed. Raise via VAD_END_SILENCE_MS if
+    # slow speakers get cut mid-sentence.
+    vad_end_silence_ms: int = 500
     vad_max_utterance_s: int = 25
     # Utterance-level noise gate: drop an utterance before STT unless a frame reached
     # this speech probability. 0.0 disables it (original behaviour — no gate). Raise

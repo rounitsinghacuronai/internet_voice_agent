@@ -2,13 +2,18 @@
 
 Given one cleaned line plus the turn's StyleProfile, it:
 
-  • adds a brief active-listening lead-in on the first line of a turn
-    ("Alright…", "बरं…") — rotated so it never repeats back-to-back,
-  • uses a genuine thinking filler instead ("Let me just check…") ONLY when a
-    real lookup/tool call happened this turn (never faked),
   • breaks a long line into comfortable thought-groups so the voice can breathe
     rather than delivering one uninterrupted paragraph,
   • leaves reviewed/fixed lines (greeting, safety) structurally untouched.
+
+It deliberately does NOT inject canned acknowledgements or thinking fillers
+("Alright…", "Let me just check…") in front of the LLM's words any more.
+That mechanical prepend was the single biggest "this is a bot" tell in live
+calls: every turn opened with a rotated stock phrase, stacked on top of
+whatever natural opener the model itself produced, giving every caller the
+same audible template. Openers, hesitations, and acknowledgements are now the
+LLM's job alone (see prompts/modules/02_style.md) — the model varies them with
+real conversational judgement, including *not* using one most of the time.
 
 Output is a list of Segments (text + trailing pause type) that the Prosody
 Planner refines and the Sarvam Formatter renders.
@@ -17,39 +22,10 @@ from __future__ import annotations
 
 import re
 
-from .lexicon import ACKS, HESITATIONS, INTERJECTIONS, lang_table
 from .plan import PauseType, Segment, SpeechContext, StyleProfile
 from .variation import VariationTracker
 
 _CLAUSE_SPLIT = re.compile(r"(?<=[,;—।])\s+")
-_WORD = re.compile(r"[^\s,.;:!?।—]+")
-
-
-def _first_word(text: str) -> str:
-    m = _WORD.search(text)
-    return m.group(0).lower().strip("…") if m else ""
-
-
-def _already_opened(text: str, lang: str) -> bool:
-    """Does the line already start with an acknowledgement / interjection, so we
-    must NOT prepend another one (avoids 'Alright. Okay, ...' double-acks)?"""
-    fw = _first_word(text)
-    if not fw:
-        return False
-    openers = {w.split()[0].lower() for w in
-               lang_table(ACKS, lang) + lang_table(INTERJECTIONS, lang)
-               + lang_table(HESITATIONS, lang)}
-    # common LLM openers / hesitations across all three languages
-    openers |= {"sorry", "माफ", "माफ़", "अरे", "अरेरे", "ok", "okay", "alright",
-                "sure", "right", "जी", "बरं", "अच्छा", "हं", "समजलं", "समझ",
-                "let", "one", "just", "एक", "जरा", "ज़रा", "अभी", "आत्ता"}
-    return fw in openers or text.strip().startswith(("…", "..."))
-
-
-def _is_bare_ack(text: str, lang: str) -> bool:
-    """The line is itself just a short acknowledgement (don't lead into it)."""
-    stripped = re.sub(r"[.!?…]+$", "", text.strip())
-    return _already_opened(text, lang) and len(stripped) <= 14
 
 
 def _split_thoughts(text: str, max_chars: int) -> list[str]:
@@ -86,34 +62,15 @@ class HumanSpeechEngine:
         if not text:
             return []
 
-        # Reviewed/fixed lines: no restructuring, no lead — deliver as written.
+        # Reviewed/fixed lines: no restructuring — deliver as written.
         if profile.preserve_wording:
             return [Segment(text, PauseType.COMPLETION)]
 
-        segments: list[Segment] = []
-
-        # ── active listening / hesitation lead-in (first line of a turn only) ──
-        if ctx.is_first_utterance and not _is_bare_ack(text, lang) \
-                and not _already_opened(text, lang):
-            lead = self._lead_in(lang, profile, ctx, variation)
-            if lead:
-                segments.append(Segment(lead, PauseType.THINKING))
-
         # ── thought-grouping for breathing ──
+        segments: list[Segment] = []
         groups = _split_thoughts(text, profile.max_thought_chars)
         for i, g in enumerate(groups):
             last = i == len(groups) - 1
             segments.append(Segment(g, PauseType.COMPLETION if last else PauseType.BREATH))
 
         return segments
-
-    @staticmethod
-    def _lead_in(lang: str, profile: StyleProfile, ctx: SpeechContext,
-                 variation: VariationTracker) -> str:
-        # A real lookup happened → a genuine thinking filler (never faked).
-        if ctx.processing and profile.hesitation_ok:
-            return variation.pick(f"hes:{lang}", lang_table(HESITATIONS, lang))
-        # Otherwise a brief acknowledgement, if the style allows one.
-        if profile.lead_in:
-            return variation.pick(f"ack:{lang}", lang_table(ACKS, lang))
-        return ""

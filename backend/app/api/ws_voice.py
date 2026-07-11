@@ -42,6 +42,7 @@ This implementation fixes all three:
      _late_tool_absorb() captures results that complete post-barge-in so
      memory is never corrupted mid-write.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -91,7 +92,9 @@ class VoiceSession:
         # Reuse the model loaded once at process startup (main.py) instead of
         # reloading it per call — this used to block the event loop before the
         # WebSocket even finished accepting (see audio/vad.py for detail).
-        self.vad = SileroVAD(self.s.vad_threshold, ort_session=getattr(deps, "vad_session", None))
+        self.vad = SileroVAD(
+            self.s.vad_threshold, ort_session=getattr(deps, "vad_session", None)
+        )
         self.endpointer = Endpointer(self.s, self.vad)
         self.pipeline = AudioPipeline(self.s, self.session_id)
 
@@ -183,15 +186,21 @@ class VoiceSession:
 
     async def _teardown(self) -> None:
         self.sm.transition(CallState.IDLE, "call_ended")
-        for t in (self._active_turn_task, self._producer_task, self._speak_task,
-                  self._silence_task):
+        for t in (
+            self._active_turn_task,
+            self._producer_task,
+            self._speak_task,
+            self._silence_task,
+        ):
             if t and not t.done():
                 t.cancel()
         self.pipeline.reset()
         self.im.summary_log()
         log.info(
             "session %s closed (turns=%d, interruptions=%d)",
-            self.session_id, self.manager.turn_no, self.im.total_interruptions,
+            self.session_id,
+            self.manager.turn_no,
+            self.im.total_interruptions,
         )
 
     # ── inbound audio ────────────────────────────────────────────────────────
@@ -204,8 +213,11 @@ class VoiceSession:
         peak = float(np.abs(np.frombuffer(pcm16, dtype=np.int16)).max() / 32768.0)
         self._peak = max(self._peak, peak)
         if self._frames_rx % 125 == 0:
-            log.info("mic peak (last 5s): %.3f  %s", self._peak,
-                     "— SILENCE" if self._peak < 0.02 else "")
+            log.info(
+                "mic peak (last 5s): %.3f  %s",
+                self._peak,
+                "— SILENCE" if self._peak < 0.02 else "",
+            )
             self._peak = 0.0
 
         # KEY FIX: pass speaking=True during TTS so Endpointer applies the
@@ -234,13 +246,17 @@ class VoiceSession:
             log.info(
                 "session %s: double-talk VAD prob during agent speech: %.2f "
                 "(interrupt threshold %.2f)",
-                self.session_id, self.vad.last_prob, self.vad.threshold,
+                self.session_id,
+                self.vad.last_prob,
+                self.vad.threshold,
             )
 
     async def _on_speech_start(self) -> None:
         # Any detected caller speech means they are present — reset the silence clock.
         self._last_activity = time.monotonic()
-        log.debug("session %s: speech_start (state=%s)", self.session_id, self.sm.state.value)
+        log.debug(
+            "session %s: speech_start (state=%s)", self.session_id, self.sm.state.value
+        )
         # Barge-in globally disabled (e.g. speaker+mic testing where the agent's own
         # audio echoes back and self-triggers). Let the current utterance finish.
         if not self.s.bargein_enabled:
@@ -251,8 +267,10 @@ class VoiceSession:
             log.info("session %s: barge-in suppressed during greeting", self.session_id)
             return
         if not self.sm.is_interruptible():
-            log.debug("session %s: speech in non-interruptible state — ignored",
-                      self.session_id)
+            log.debug(
+                "session %s: speech in non-interruptible state — ignored",
+                self.session_id,
+            )
             return
         # Post-TTS grace window: while the agent is SPEAKING, ignore speech that
         # arrives in the first bargein_tts_grace_ms after TTS started. On a
@@ -267,13 +285,17 @@ class VoiceSession:
             if since_ms < self.s.bargein_tts_grace_ms:
                 log.info(
                     "session %s: barge-in suppressed by TTS grace (%.0f/%d ms)",
-                    self.session_id, since_ms, self.s.bargein_tts_grace_ms,
+                    self.session_id,
+                    since_ms,
+                    self.s.bargein_tts_grace_ms,
                 )
                 return
         if self.im.should_interrupt(self.sm.state, 0.0):
             await self._trigger_barge_in()
         else:
-            log.info("session %s: barge-in suppressed by cooldown/debounce", self.session_id)
+            log.info(
+                "session %s: barge-in suppressed by cooldown/debounce", self.session_id
+            )
 
     async def _on_utterance(self, pcm16: bytes, peak_prob: float = 1.0) -> None:
         """Full utterance available — launch a handler task."""
@@ -323,8 +345,10 @@ class VoiceSession:
         await self._send({"type": "interrupted"})
         log.info(
             "session %s: BARGE-IN (was=%s turn=%d total=%d)",
-            self.session_id, state_before.value,
-            self.manager.turn_no, self.im.total_interruptions,
+            self.session_id,
+            state_before.value,
+            self.manager.turn_no,
+            self.im.total_interruptions,
         )
 
     # ── utterance handling ───────────────────────────────────────────────────
@@ -355,7 +379,8 @@ class VoiceSession:
             if result.suppressed:
                 log.info(
                     "session %s: utterance suppressed — %s",
-                    self.session_id, result.suppression_reason,
+                    self.session_id,
+                    result.suppression_reason,
                 )
                 self.sm.transition(CallState.LISTENING, "utterance_suppressed")
                 await self._send({"type": "state", "value": "listening"})
@@ -400,8 +425,10 @@ class VoiceSession:
                 digits, complete = memory.feed_number_fragment(tr.text)
                 log.info(
                     "session %s: number fragment for '%s' → %r (complete=%s)",
-                    self.session_id, memory.number_buffer.field or "(just completed)",
-                    digits, complete,
+                    self.session_id,
+                    memory.number_buffer.field or "(just completed)",
+                    digits,
+                    complete,
                 )
                 if not complete:
                     # Keep listening silently — do not send a partial number to
@@ -413,10 +440,15 @@ class VoiceSession:
             await self._send({"type": "user", "text": tr.text, "lang": tr.language})
 
             try:
-                await self._run_turn(tr.text, tr.language, peak_prob, tr.language_confidence)
+                await self._run_turn(
+                    tr.text, tr.language, peak_prob, tr.language_confidence
+                )
             except asyncio.CancelledError:
-                log.info("session %s: turn interrupted after STT (turn %d)",
-                         self.session_id, self.manager.turn_no)
+                log.info(
+                    "session %s: turn interrupted after STT (turn %d)",
+                    self.session_id,
+                    self.manager.turn_no,
+                )
                 self.sm.transition(CallState.LISTENING, "interrupted_after_stt")
                 await self._send({"type": "state", "value": "listening"})
                 raise  # re-raise so outer finally still runs
@@ -440,9 +472,11 @@ class VoiceSession:
             # Typed input: barge-in first, then start the new turn
             if self.sm.is_interruptible():
                 await self._trigger_barge_in()
-                await asyncio.sleep(0)   # yield so cancellation propagates
+                await asyncio.sleep(0)  # yield so cancellation propagates
             self.sm.transition(CallState.THINKING, "text_input")
-            await self._send({"type": "user", "text": msg.get("text", ""), "lang": "unknown"})
+            await self._send(
+                {"type": "user", "text": msg.get("text", ""), "lang": "unknown"}
+            )
             task = asyncio.create_task(
                 self._run_turn_guarded(msg.get("text", ""), "unknown"),
                 name=f"text_{self.session_id}",
@@ -464,8 +498,11 @@ class VoiceSession:
     # ── turn execution ────────────────────────────────────────────────────────
 
     async def _run_turn(
-        self, text: str, stt_lang: str,
-        peak_prob: float = 1.0, language_confidence: float | None = None,
+        self,
+        text: str,
+        stt_lang: str,
+        peak_prob: float = 1.0,
+        language_confidence: float | None = None,
     ) -> None:
         """One full AI turn: LLM generation + TTS streaming.
 
@@ -492,7 +529,7 @@ class VoiceSession:
                     raise
                 finally:
                     try:
-                        queue.put_nowait(None)   # sentinel: always signal the speaker
+                        queue.put_nowait(None)  # sentinel: always signal the speaker
                     except Exception:
                         pass
 
@@ -529,8 +566,11 @@ class VoiceSession:
             except asyncio.CancelledError:
                 # gather already cancelled producer + speak_task.
                 # State and memory sends happen in _handle_utterance's except block.
-                log.info("session %s: _run_turn cancelled (turn %d)",
-                         self.session_id, self.manager.turn_no)
+                log.info(
+                    "session %s: _run_turn cancelled (turn %d)",
+                    self.session_id,
+                    self.manager.turn_no,
+                )
                 raise
 
             finally:
@@ -561,7 +601,9 @@ class VoiceSession:
                 msg["style"] = chunk.style
             await self._send(msg)
             await self._send({"type": "audio_start"})
-            async for pcm in self.deps.tts.synthesize(chunk.text, chunk.language, chunk.pace):
+            async for pcm in self.deps.tts.synthesize(
+                chunk.text, chunk.language, chunk.pace
+            ):
                 # Feed TTS PCM as AEC reference BEFORE sending to client so the
                 # reference buffer stays synchronised with what the speaker plays.
                 self.pipeline.feed_tts_reference(pcm, self.s.tts_sample_rate)
@@ -598,7 +640,7 @@ class VoiceSession:
         except Exception as e:
             log.error("session %s: greeting TTS failed: %s", self.session_id, e)
         finally:
-            self._greeting_active = False   # greeting over — barge-in resumes normally
+            self._greeting_active = False  # greeting over — barge-in resumes normally
             self.pipeline.notify_tts_ended()
 
     # ── silence / no-response watchdog ─────────────────────────────────────────
@@ -617,14 +659,20 @@ class VoiceSession:
                 await asyncio.sleep(1.0)
 
                 # Busy (agent thinking/speaking, or a turn being handled) → not silence.
-                if self.sm.state not in (CallState.LISTENING, CallState.WAITING_FOR_USER):
+                if self.sm.state not in (
+                    CallState.LISTENING,
+                    CallState.WAITING_FOR_USER,
+                ):
                     self._last_activity = time.monotonic()
                     continue
                 if self._active_turn_task and not self._active_turn_task.done():
                     self._last_activity = time.monotonic()
                     continue
 
-                if time.monotonic() - self._last_activity < self.s.silence_prompt_seconds:
+                if (
+                    time.monotonic() - self._last_activity
+                    < self.s.silence_prompt_seconds
+                ):
                     continue
 
                 await self._fire_silence_prompt()
@@ -641,12 +689,18 @@ class VoiceSession:
         """Speak one re-prompt (or the final closing) and return to listening."""
         self._no_response_count += 1
         final = self._no_response_count >= self.s.silence_max_prompts
-        chunk = (self.manager.no_response_closing() if final
-                 else self.manager.silence_nudge())
+        chunk = (
+            self.manager.no_response_closing()
+            if final
+            else self.manager.silence_nudge()
+        )
         log.info(
             "session %s: no-response prompt %d/%d%s (lang=%s)",
-            self.session_id, self._no_response_count, self.s.silence_max_prompts,
-            " — disconnecting" if final else "", chunk.language,
+            self.session_id,
+            self._no_response_count,
+            self.s.silence_max_prompts,
+            " — disconnecting" if final else "",
+            chunk.language,
         )
 
         self.sm.transition(CallState.SPEAKING, "silence_prompt")
@@ -717,7 +771,9 @@ class VoiceSession:
         if remaining > 0.05:
             log.info(
                 "session %s: draining playback %.2fs (%s) — barge-in stays live",
-                self.session_id, remaining, reason,
+                self.session_id,
+                remaining,
+                reason,
             )
             await asyncio.sleep(remaining)
 

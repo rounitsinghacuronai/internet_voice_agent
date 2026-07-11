@@ -39,8 +39,12 @@ class GeminiLLM:
         return body
 
     async def stream_chat(
-        self, messages: list[dict], tools: list[dict] | None = None, temperature: float = 0.4
+        self, messages: list[dict], tools: list[dict] | None = None, temperature: float = 0.6
     ) -> AsyncIterator[LLMDelta]:
+        # 0.6: enough sampling variety that ten callers with the same problem hear
+        # ten differently-worded replies (a fixed low temperature made phrasing
+        # converge on the same stock sentences — an instant "it's a bot" tell).
+        # Facts/numbers come from tools and call memory, so this is safe.
         """Yields LLMDelta(text=...) for content; a final LLMDelta carries assembled
         tool_calls and finish reason."""
         body = self._body(messages, tools, temperature, stream=True)

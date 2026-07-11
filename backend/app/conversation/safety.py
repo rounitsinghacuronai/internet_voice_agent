@@ -63,5 +63,5 @@ def assess(text: str) -> SafetyVerdict:
 
 
 def safety_line(verdict: SafetyVerdict, language: str) -> str:
-    lang = language if language in ("mr", "hi", "en") else "hi"
+    lang = language if language in ("mr", "hi", "en") else "mr"  # Maharashtra default
     return SAFETY_LINES[verdict.line_key][lang]

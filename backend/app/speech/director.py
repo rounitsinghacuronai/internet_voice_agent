@@ -33,6 +33,14 @@ _WORRIED = re.compile(
     r"\b(scared|afraid|worried|dangerous|डर|घाबर|भीती|खतरा|धोका|चिंता)\b",
     re.IGNORECASE,
 )
+# gratitude / relief — the caller has visibly cooled off or is happy. Lets the
+# manager CLEAR a sticky negative mood instead of treating one angry sentence
+# five turns ago as a permanently angry caller.
+_CALM = re.compile(
+    r"\b(thank(?:s| you)?|great|perfect|wonderful|धन्यवाद|आभार(?:ी)?|शुक्रिया|"
+    r"थैंक|बरं झालं|छान|मस्त|बढ़िया|बढिया|बहुत अच्छा|खूप छान)\b",
+    re.IGNORECASE,
+)
 
 
 def detect_caller_emotion(text: str, existing: str | None = None) -> str | None:
@@ -48,6 +56,8 @@ def detect_caller_emotion(text: str, existing: str | None = None) -> str | None:
         return "frustrated"
     if _WORRIED.search(text):
         return "worried"
+    if _CALM.search(text):
+        return "calm"
     return existing
 
 

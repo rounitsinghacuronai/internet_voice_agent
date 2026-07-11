@@ -152,18 +152,20 @@ def test_angry_caller_gets_patient_slower_delivery():
     assert p.pace <= 0.94
 
 
-# ── engine: acknowledgement / hesitation / no-double-ack ─────────────────────
-def test_lead_in_added_on_first_line():
+# ── engine: the LLM's own words pass through — no canned prepends ─────────────
+# Canned rotated lead-ins ("Alright…", "Let me just check…") were removed: the
+# mechanical prepend made every turn open with a stock phrase, which is the #1
+# audible bot tell. Openers are the LLM's job now (prompts/modules/02_style.md).
+def test_no_canned_lead_in_injected_on_first_line():
     sd = _director()
     ctx = SpeechContext(
         language="en", turn_no=2, is_first_utterance=True, topic="billing"
     )
     plan = sd.plan_line("Your bill is due on the fifteenth.", ctx)
-    assert "…" in plan.text  # a thinking beat was added
-    assert plan.text.lower() != "your bill is due on the fifteenth."
+    assert plan.text.lower().startswith("your bill")
 
 
-def test_no_double_ack_when_already_opened():
+def test_llm_own_opener_passes_through_untouched():
     sd = _director()
     ctx = SpeechContext(
         language="en", turn_no=2, is_first_utterance=True, topic="billing"
@@ -172,10 +174,8 @@ def test_no_double_ack_when_already_opened():
     assert plan.text.lower().startswith("alright")
 
 
-def test_genuine_hesitation_only_when_processing():
+def test_no_hesitation_injected_even_when_processing():
     sd = _director()
-    from backend.app.speech.lexicon import HESITATIONS
-
     ctx = SpeechContext(
         language="en",
         turn_no=2,
@@ -184,8 +184,7 @@ def test_genuine_hesitation_only_when_processing():
         processing=True,
     )
     plan = sd.plan_line("Your bill is two thousand rupees.", ctx)
-    first = plan.text.split("…")[0].strip()
-    assert first in HESITATIONS["en"]
+    assert plan.text.lower().startswith("your bill")
 
 
 def test_not_first_line_gets_no_lead():

@@ -1,8 +1,14 @@
 """Sarvam Bulbul TTS. Sentence-level streaming: the manager feeds sentences as Gemini
 produces them; each sentence returns PCM16 which we chunk onto the WS. An LRU cache
-keeps repeated lines (greetings, confirmations, closings) at ~0 ms."""
+keeps repeated lines (greetings, confirmations, closings) at ~0 ms.
+
+LATENCY: `prefetch()` + in-flight de-duplication let the WS layer start synthesizing
+sentence N+1 while sentence N is still playing, so consecutive sentences flow with no
+audible HTTP-round-trip gap between them (the biggest per-turn latency after TTFT).
+"""
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -16,7 +22,8 @@ from .base import ProviderError
 
 log = logging.getLogger(__name__)
 
-# Sarvam target_language_code per engine language.
+# Sarvam target_language_code per engine language. Marathi is the fallback —
+# this deployment serves Maharashtra (Mahavitaran) only.
 _LANG_CODE = {"mr": "mr-IN", "hi": "hi-IN", "en": "en-IN"}
 
 
@@ -42,6 +49,8 @@ def _strip_wav_header(data: bytes) -> bytes:
     # Fallback: assume the minimal 44-byte header (should never reach here)
     log.warning("sarvam_tts: could not find WAV 'data' chunk — falling back to 44-byte strip")
     return data[44:]
+
+
 _CHUNK = 4800 * 2  # 200 ms of 24 kHz PCM16
 
 
@@ -50,6 +59,9 @@ class SarvamTTS:
         self.s = settings
         self.client = client
         self._cache: OrderedDict[str, bytes] = OrderedDict()
+        # key → in-flight synthesis task, so prefetch() and synthesize() of the
+        # same line share ONE network call instead of racing duplicates.
+        self._inflight: dict[str, asyncio.Task] = {}
 
     def _key(self, text: str, lang: str, pace: float) -> str:
         raw = f"{text}|{lang}|{self.s.tts_speaker}|{pace}|{self.s.tts_sample_rate}"
@@ -60,39 +72,71 @@ class SarvamTTS:
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
+        task = self._inflight.get(key)
+        if task is None:
+            task = asyncio.create_task(self._fetch(key, text, lang, pace))
+            self._inflight[key] = task
+        # shield: a barge-in cancelling the speaker must not kill a synthesis
+        # another waiter (or the cache) can still use.
+        return await asyncio.shield(task)
+
+    async def _fetch(self, key: str, text: str, lang: str, pace: float) -> bytes:
         payload = {
             "model": self.s.tts_model,
             "text": text,
-            "target_language_code": _LANG_CODE.get(lang, "hi-IN"),
+            "target_language_code": _LANG_CODE.get(lang, "mr-IN"),
             "speaker": self.s.tts_speaker,
             "pace": pace,
             "speech_sample_rate": self.s.tts_sample_rate,
             "enable_preprocessing": True,
         }
         try:
-            r = await self.client.post(
-                f"{self.s.sarvam_base}/text-to-speech",
-                headers={"api-subscription-key": self.s.sarvam_api_key},
-                json=payload,
-                timeout=20.0,
-            )
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ProviderError("sarvam_tts",
-                                f"HTTP {e.response.status_code}: {e.response.text[:300]}") from e
-        except httpx.HTTPError as e:
-            raise ProviderError("sarvam_tts", e) from e
-        audios = r.json().get("audios") or []
-        if not audios:
-            raise ProviderError("sarvam_tts", "empty audio")
-        wav = base64.b64decode(audios[0])
-        pcm = _strip_wav_header(wav)
-        if not pcm:
-            raise ProviderError("sarvam_tts", "WAV contained no PCM data")
-        self._cache[key] = pcm
-        while len(self._cache) > 256:
-            self._cache.popitem(last=False)
-        return pcm
+            try:
+                r = await self.client.post(
+                    f"{self.s.sarvam_base}/text-to-speech",
+                    headers={"api-subscription-key": self.s.sarvam_api_key},
+                    json=payload,
+                    timeout=20.0,
+                )
+                r.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise ProviderError("sarvam_tts",
+                                    f"HTTP {e.response.status_code}: {e.response.text[:300]}") from e
+            except httpx.HTTPError as e:
+                raise ProviderError("sarvam_tts", e) from e
+            audios = r.json().get("audios") or []
+            if not audios:
+                raise ProviderError("sarvam_tts", "empty audio")
+            wav = base64.b64decode(audios[0])
+            pcm = _strip_wav_header(wav)
+            if not pcm:
+                raise ProviderError("sarvam_tts", "WAV contained no PCM data")
+            self._cache[key] = pcm
+            while len(self._cache) > 256:
+                self._cache.popitem(last=False)
+            return pcm
+        finally:
+            self._inflight.pop(key, None)
+
+    def prefetch(self, text: str, language: str, pace: float | None = None) -> None:
+        """Fire-and-forget: start synthesizing a line NOW so the later
+        synthesize() call for the same line is a cache hit. Errors are logged,
+        never raised — the real synthesize() will surface them if they matter."""
+        text = (text or "").strip()
+        if not text:
+            return
+        p = pace or self.s.tts_pace
+        key = self._key(text, language, p)
+        if key in self._cache or key in self._inflight:
+            return
+
+        async def _warm() -> None:
+            try:
+                await self._synthesize_full(text, language, p)
+            except Exception as e:
+                log.debug("tts prefetch failed (will retry live): %s", e)
+
+        asyncio.create_task(_warm(), name="tts_prefetch")
 
     async def synthesize(self, text: str, language: str,
                          pace: float | None = None) -> AsyncIterator[bytes]:

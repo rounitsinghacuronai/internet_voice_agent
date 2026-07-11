@@ -49,6 +49,7 @@ from typing import AsyncIterator
 from ..config import Settings
 from ..prompts.loader import compose_system_prompt
 from ..providers.base import LLMProvider, ProviderError
+from ..speech.director import detect_caller_emotion
 from ..speech.pipeline import SpeechDirector
 from ..speech.plan import SpeechContext, StyleName
 from ..tools.registry import ToolRegistry
@@ -117,7 +118,7 @@ class TurnChunk:
     telemetry / the client UI."""
     kind: str
     text: str = ""
-    language: str = "hi"
+    language: str = "mr"   # Maharashtra deployment — Marathi is the house default
     pace: float | None = None
     style: str = ""
 
@@ -134,6 +135,11 @@ class ConversationManager:
         self.turn_no = 0
         self._last_confidence: ConfidenceEstimate | None = None
         self._last_user_text = ""
+        # Sticky caller-mood tracking: one angry sentence colours the next few
+        # turns (a real person doesn't reset to neutral mid-grievance), then
+        # decays, and clears immediately on gratitude/relief.
+        self._caller_emotion: str | None = None
+        self._emotion_set_turn: int = 0
 
         # Human Speech Generation Engine + Voice Director. One instance per call
         # (holds the anti-repetition VariationTracker). None → raw sentence → TTS.
@@ -182,9 +188,47 @@ class ConversationManager:
             just_registered_complaint=len(self.memory.complaints) > self._turn_complaints_before,
             topic=self.topic.active,
             confidence_tier=(self._last_confidence.tier.value if self._last_confidence else "high"),
+            caller_emotion=self._caller_emotion,
             processing=self._turn_processed,
             user_text=self._last_user_text,
         )
+
+    # ── caller-sentiment tracking ─────────────────────────────────────────────
+    _EMOTION_DECAY_TURNS = 3   # negative mood fades after this many quiet turns
+
+    def _update_caller_emotion(self, user_text: str) -> None:
+        sensed = detect_caller_emotion(user_text)
+        if sensed == "calm":
+            # gratitude/relief — grievance resolved, drop any sticky negative mood
+            if self._caller_emotion:
+                log.info("caller mood cleared (%s → calm)", self._caller_emotion)
+            self._caller_emotion = None
+        elif sensed:
+            self._caller_emotion = sensed
+            self._emotion_set_turn = self.turn_no
+        elif (self._caller_emotion
+              and self.turn_no - self._emotion_set_turn > self._EMOTION_DECAY_TURNS):
+            self._caller_emotion = None          # cooled off on its own
+
+    _MOOD_DIRECTIVES = {
+        "angry": ("[CALLER MOOD: angry] The caller is upset. Stay calm and steady — "
+                  "never cheerful, never defensive. Acknowledge the problem plainly in "
+                  "your own words FIRST, then act immediately. Short sentences. Never "
+                  "tell them to calm down, never over-apologise."),
+        "frustrated": ("[CALLER MOOD: frustrated] The caller is fed up (repeat issue, "
+                       "long wait). Apologise once, sincerely and specifically, take "
+                       "ownership ('I'll take care of this'), and get it done — no "
+                       "excuses, no process talk."),
+        "worried": ("[CALLER MOOD: worried] The caller sounds anxious. Reassure "
+                    "calmly and concretely — say exactly what will happen and when. "
+                    "No padding, warm steady tone."),
+        "elderly": ("[CALLER MOOD: elderly/unsure] Extra patience. One simple step "
+                    "at a time, no jargon, gently confirm they got the important "
+                    "number."),
+    }
+
+    def _mood_directive(self) -> str:
+        return self._MOOD_DIRECTIVES.get(self._caller_emotion or "", "")
 
     # ── public API ───────────────────────────────────────────────────────────
     def greeting(self) -> TurnChunk:
@@ -218,6 +262,7 @@ class ConversationManager:
         if not user_text:
             return
         self._last_user_text = user_text
+        self._update_caller_emotion(user_text)
 
         self.memory.scan_user_text(user_text)
         active_lang = self.lang.update(user_text, stt_lang)
@@ -249,7 +294,7 @@ class ConversationManager:
             raise
         except ProviderError as e:
             log.error("turn failed: %s", e)
-            lang = active_lang if active_lang in _APOLOGY else "hi"
+            lang = active_lang if active_lang in _APOLOGY else "mr"
             text = _APOLOGY[lang]
             self.memory.history.append({"role": "assistant", "content": text})
             yield self._voice_fixed(text, lang, StyleName.DEFAULT)
@@ -278,7 +323,7 @@ class ConversationManager:
 
     # ── emergency path ───────────────────────────────────────────────────────
     async def _emergency(self, verdict: safety.SafetyVerdict, user_text: str) -> AsyncIterator[TurnChunk]:
-        lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "hi"
+        lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "mr"
         line = safety.safety_line(verdict, lang)
         yield self._voice_fixed(line, lang, StyleName.EMERGENCY)     # speak FIRST
         location = self.memory.location or user_text[:120]
@@ -306,7 +351,8 @@ class ConversationManager:
     def _messages(self, knowledge_block: str = "") -> list[dict]:
         confidence_directive = self._last_confidence.directive() if self._last_confidence else ""
         directives = "\n\n".join(
-            d for d in (confidence_directive, self.topic.directive()) if d
+            d for d in (confidence_directive, self.topic.directive(),
+                        self._mood_directive()) if d
         )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
                                        knowledge_block, directives)
@@ -316,7 +362,7 @@ class ConversationManager:
     async def _llm_turn(self) -> AsyncIterator[TurnChunk]:
         knowledge_block = ""
         scratch: list[dict] = []          # tool call/result messages within this turn
-        lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "hi"
+        lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "mr"
 
         # Reset per-turn voicing state. The Voice Director assigns ONE style for
         # the whole turn (decided on the first spoken sentence) so the reply is
@@ -380,9 +426,12 @@ class ConversationManager:
                 return
 
             # ── tool execution — SHIELDED so barge-in cannot abort in-flight writes ──
+            # content stays None: the spoken sentences were already eager-committed to
+            # memory.history above. Repeating them here put the same text in the next
+            # round's context TWICE, which nudged the model into repeating itself.
             assistant_msg: dict = {
                 "role": "assistant",
-                "content": " ".join(spoken) or None,
+                "content": None,
                 "tool_calls": tool_calls,
             }
             scratch.append(assistant_msg)

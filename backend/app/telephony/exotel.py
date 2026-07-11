@@ -35,10 +35,12 @@ Audio-rate map:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
 import logging
+import re
 
 from fastapi import APIRouter, WebSocket
 
@@ -48,6 +50,24 @@ from .resample import resample_pcm16
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+# How long to wait for Exotel's `start` message after the WS handshake.
+_START_TIMEOUT_S = 10.0
+
+
+def _parse_sample_rate(value) -> int | None:
+    """Parse a sample rate that may arrive as 8000, "8000", "8k", "8khz"…
+    Returns a validated rate or None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        rate = int(value)
+    else:
+        m = re.match(r"\s*(\d+)\s*(k(?:hz)?)?\s*$", str(value), re.IGNORECASE)
+        if not m:
+            return None
+        rate = int(m.group(1)) * (1000 if m.group(2) else 1)
+    return rate if rate in (8000, 16000, 24000) else None
 
 # Outbound chunking to Exotel. Must be multiples of 320 bytes; spec floor 3.2 kB,
 # ceiling 100 kB. We aim a little under the ceiling on a 320-byte boundary.
@@ -65,8 +85,15 @@ class ExotelTransport:
         self.s = settings
         self._tts_rate = settings.tts_sample_rate
 
-        # Negotiated Exotel leg rate; overwritten from the start message.
-        self.leg_rate = settings.exotel_sample_rate
+        # Negotiated Exotel leg rate. Priority: start message (authoritative)
+        # > ?sample-rate= query param on the applet URL > configured default.
+        # NOTE: Exotel defaults the leg to 8 kHz when the applet URL has no
+        # ?sample-rate= param — assuming 16 kHz then garbles audio both ways.
+        qp = getattr(ws, "query_params", None) or {}
+        self.leg_rate = (
+            _parse_sample_rate(qp.get("sample-rate"))
+            or settings.exotel_sample_rate
+        )
 
         # Populated from the start message — useful for personalization / logs.
         self.stream_sid: str | None = None
@@ -91,8 +118,17 @@ class ExotelTransport:
         before the greeting is spoken.
         """
         await self.ws.accept()
+        deadline = asyncio.get_event_loop().time() + _START_TIMEOUT_S
         while self.stream_sid is None and not self._closed:
-            msg = await self.ws.receive()
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                log.error("exotel: no start message within %.0fs — closing", _START_TIMEOUT_S)
+                await self.close()
+                return
+            try:
+                msg = await asyncio.wait_for(self.ws.receive(), timeout=remaining)
+            except asyncio.TimeoutError:
+                continue
             if msg.get("type") == "websocket.disconnect":
                 self._closed = True
                 return
@@ -115,11 +151,9 @@ class ExotelTransport:
         self.to_number = start.get("to")
         self.custom_parameters = start.get("custom_parameters") or {}
         mf = start.get("media_format") or {}
-        try:
-            if mf.get("sample_rate"):
-                self.leg_rate = int(mf["sample_rate"])
-        except (ValueError, TypeError):
-            pass
+        rate = _parse_sample_rate(mf.get("sample_rate"))
+        if rate:
+            self.leg_rate = rate
         log.info(
             "exotel start: stream=%s call=%s from=%s to=%s leg_rate=%dHz params=%s",
             self.stream_sid, self.call_sid, self.from_number, self.to_number,
@@ -134,6 +168,11 @@ class ExotelTransport:
         connected / mark / dtmf → consumed internally; keep reading.
         """
         while True:
+            # Never touch the underlying socket after it's gone — Starlette raises
+            # RuntimeError on receive-after-disconnect, which would crash the
+            # session instead of ending it cleanly.
+            if self._closed:
+                return {"type": "websocket.disconnect"}
             msg = await self.ws.receive()
             if msg.get("type") == "websocket.disconnect":
                 self._closed = True
@@ -260,21 +299,47 @@ class ExotelTransport:
 
 
 def _authorized(ws: WebSocket, settings: Settings) -> bool:
-    """Optional HTTP Basic auth. Exotel sends `Authorization: Basic base64(key:token)`
-    when the Voicebot URL is `wss://<key>:<token>@host/...`. Enforced only when both
-    EXOTEL_API_KEY and EXOTEL_API_TOKEN are configured; otherwise rely on Exotel IP
-    whitelisting and accept all (keeps local testing frictionless)."""
+    """Optional auth, enforced only when BOTH EXOTEL_API_KEY and EXOTEL_API_TOKEN
+    are configured; otherwise rely on Exotel IP whitelisting and accept all.
+
+    Two accepted forms (Exotel supports credentials in the applet URL):
+      1. Basic header — applet URL `wss://<key>:<token>@host/ws/exotel`;
+         Exotel converts the userinfo to `Authorization: Basic base64(key:token)`.
+      2. Query params — applet URL `wss://host/ws/exotel?key=<key>&token=<token>`
+         (counts toward Exotel's 3-custom-param / 256-char limit).
+
+    WARNING logged on rejection with the exact reason — a mismatch here is
+    otherwise invisible and shows up only as calls hanging up after ~1 second.
+    """
     if not (settings.exotel_api_key and settings.exotel_api_token):
         return True
+    # form 2: query params
+    qp = getattr(ws, "query_params", None) or {}
+    if (qp.get("key") == settings.exotel_api_key
+            and qp.get("token") == settings.exotel_api_token):
+        return True
+    # form 1: Basic header
     header = ws.headers.get("authorization", "")
     if not header.startswith("Basic "):
+        log.error(
+            "exotel AUTH REJECT: EXOTEL_API_KEY/TOKEN are set on this server but the "
+            "connection carried no Authorization header and no ?key=&token= params. "
+            "Fix ONE of: (a) set the App Bazaar Voicebot URL to "
+            "wss://<key>:<token>@<host>/ws/exotel, (b) append ?key=<key>&token=<token>, "
+            "or (c) unset EXOTEL_API_KEY/EXOTEL_API_TOKEN in .env and use Exotel IP "
+            "whitelisting. Until then every call will ring and drop after ~1 second."
+        )
         return False
     try:
         decoded = base64.b64decode(header[6:]).decode("utf-8")
     except (binascii.Error, ValueError, UnicodeDecodeError):
+        log.error("exotel AUTH REJECT: malformed Basic authorization header")
         return False
-    expected = f"{settings.exotel_api_key}:{settings.exotel_api_token}"
-    return decoded == expected
+    if decoded != f"{settings.exotel_api_key}:{settings.exotel_api_token}":
+        log.error("exotel AUTH REJECT: key/token mismatch — the credentials in the "
+                  "App Bazaar URL do not match EXOTEL_API_KEY/EXOTEL_API_TOKEN in .env")
+        return False
+    return True
 
 
 @router.websocket("/ws/exotel")
@@ -286,7 +351,13 @@ async def ws_exotel(ws: WebSocket):
         return
     if not _authorized(ws, settings):
         await ws.close(code=1008)  # policy violation
-        log.warning("exotel: unauthorized connection rejected")
         return
     transport = ExotelTransport(ws, settings)
-    await VoiceSession(transport, deps).run()
+    try:
+        await VoiceSession(transport, deps).run()
+    except Exception:
+        # A crash here silently kills the phone call — make it loud in the logs
+        # and close the leg cleanly instead of leaving Exotel hanging.
+        log.exception("exotel: session crashed (call=%s stream=%s)",
+                      transport.call_sid, transport.stream_sid)
+        await transport.close()
