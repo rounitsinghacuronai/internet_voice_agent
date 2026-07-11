@@ -327,15 +327,19 @@ class ExotelTransport:
             return
         self._out_seq += 1
         self._out_chunk += 1
-        # Field types follow Exotel's schema EXACTLY: their event struct declares
-        # sequence_number and timestamp as strings — a strict parser fails to
-        # unmarshal an int into a string field and tears the stream down.
+        # EVERY numeric field goes as a STRING. Confirmed by Exotel platform
+        # engineering (11 Jul 2026): their Go ingest struct declares chunk,
+        # sequence_number and timestamp as string; an int in ANY of them fails
+        # json.Unmarshal ("cannot unmarshal number into Go struct field
+        # Media.media.chunk of type string") and the platform closes the stream
+        # — which surfaced as every call dropping ~1 s after pickup. Their
+        # support-center doc shows `"chunk": 2` as a number; the doc is wrong.
         msg = {
             "event": "media",
             "stream_sid": self.stream_sid,
             "sequence_number": str(self._out_seq),
             "media": {
-                "chunk": self._out_chunk,
+                "chunk": str(self._out_chunk),
                 "timestamp": str(int((time.monotonic() - self._stream_t0) * 1000)),
                 "payload": base64.b64encode(pcm).decode("ascii"),
             },
