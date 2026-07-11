@@ -129,6 +129,14 @@ class ExotelTransport:
         self._pace_t0: float | None = None   # monotonic anchor of current burst
         self._sent_s = 0.0                   # seconds of audio sent since anchor
 
+        # media timestamp anchor (ms since stream start, per Exotel's schema)
+        self._stream_t0: float = time.monotonic()
+        self._out_chunk = 0
+
+        # diagnostics: counts of every inbound event type, logged at stop —
+        # tells us definitively whether Exotel ever streamed caller audio.
+        self._rx_events: dict[str, int] = {}
+
     # ── VoiceSession-facing interface ──────────────────────────────────────────
 
     async def accept(self) -> None:
@@ -163,6 +171,7 @@ class ExotelTransport:
                 continue
             if data.get("event") == "start":
                 self._on_start(data)
+                self._stream_t0 = time.monotonic()
 
     def _on_start(self, data: dict) -> None:
         start = data.get("start") or {}
@@ -208,6 +217,7 @@ class ExotelTransport:
                 continue
 
             event = data.get("event")
+            self._rx_events[event or "?"] = self._rx_events.get(event or "?", 0) + 1
             if event == "media":
                 pcm = self._decode_media(data)
                 if pcm is None:
@@ -217,7 +227,9 @@ class ExotelTransport:
                 pcm16 = resample_pcm16(pcm, self.leg_rate, self.s.input_sample_rate)
                 return {"type": "websocket.receive", "bytes": pcm16}
             elif event == "stop":
-                log.info("exotel stop: %s", (data.get("stop") or {}).get("reason"))
+                log.info("exotel stop: reason=%r | rx events=%s | tx media msgs=%d",
+                         (data.get("stop") or {}).get("reason"),
+                         self._rx_events, self._out_seq)
                 self._closed = True
                 return {"type": "websocket.disconnect"}
             elif event == "dtmf":
@@ -314,11 +326,19 @@ class ExotelTransport:
         if self._closed:
             return
         self._out_seq += 1
+        self._out_chunk += 1
+        # Field types follow Exotel's schema EXACTLY: their event struct declares
+        # sequence_number and timestamp as strings — a strict parser fails to
+        # unmarshal an int into a string field and tears the stream down.
         msg = {
             "event": "media",
             "stream_sid": self.stream_sid,
-            "sequence_number": self._out_seq,
-            "media": {"payload": base64.b64encode(pcm).decode("ascii")},
+            "sequence_number": str(self._out_seq),
+            "media": {
+                "chunk": self._out_chunk,
+                "timestamp": str(int((time.monotonic() - self._stream_t0) * 1000)),
+                "payload": base64.b64encode(pcm).decode("ascii"),
+            },
         }
         try:
             await self.ws.send_text(json.dumps(msg))
