@@ -102,6 +102,9 @@ def extract_mfcc(
     frame_ms: float = 25.0,
     hop_ms: float = 10.0,
     pre_emphasis: float = 0.97,
+    f_min: float = 80.0,
+    f_max: float = 7600.0,
+    cms: bool = True,
 ) -> Optional[np.ndarray]:
     """Extract MFCC matrix from float32 mono audio.
 
@@ -132,9 +135,9 @@ def extract_mfcc(
     spec = np.abs(np.fft.rfft(frames, n=n_fft)) ** 2  # (n_frames, n_fft//2+1)
 
     # Mel filterbank
-    key = (sr, n_fft, n_mels)
+    key = (sr, n_fft, n_mels, f_min, f_max)
     if key not in _FB_CACHE:
-        _FB_CACHE[key] = _mel_filterbank(sr, n_fft, n_mels)
+        _FB_CACHE[key] = _mel_filterbank(sr, n_fft, n_mels, f_min, f_max)
     fb = _FB_CACHE[key]
 
     mel_energy = np.maximum(np.dot(spec, fb.T), _EPS)  # (n_frames, n_mels)
@@ -146,18 +149,32 @@ def extract_mfcc(
     dct_basis = np.cos(np.pi * k * (2 * np.arange(n) + 1) / (2 * n))  # (n_mfcc, n_mels)
     mfcc = np.dot(log_mel, dct_basis.T)  # (n_frames, n_mfcc)
 
-    # Cepstral mean subtraction (per-utterance normalisation)
-    mfcc -= mfcc.mean(axis=0, keepdims=True)
+    # Cepstral mean subtraction (per-utterance normalisation). NOTE: must be
+    # OFF when the caller then averages over time — CMS makes the time-mean
+    # identically zero (see embed()).
+    if cms:
+        mfcc -= mfcc.mean(axis=0, keepdims=True)
 
     return mfcc.astype(np.float32)
 
 
-def embed(audio: np.ndarray, sr: int = 16000) -> Optional[np.ndarray]:
-    """Return a (13,) mean-MFCC embedding for one utterance, or None."""
-    mfcc = extract_mfcc(audio, sr=sr)
+def embed(audio: np.ndarray, sr: int = 16000,
+          f_max: float = 7600.0) -> Optional[np.ndarray]:
+    """Return a (26,) [mean ‖ std] MFCC embedding for one utterance, or None.
+
+    Two critical details, both learned the hard way:
+    - CMS must be OFF here: cepstral mean subtraction followed by a time-mean
+      yields the ZERO VECTOR for every utterance — the original code did
+      exactly that, so every similarity was 0.0 and every caller was rejected
+      after enrollment. The [mean ‖ std] over raw MFCCs actually carries voice
+      identity; the per-call channel is constant so CMS isn't needed.
+    - `f_max` should be ~3800 Hz for telephony: a phone leg carries voice only
+      to ~3.4 kHz, so analyzing up to 7.6 kHz fills half the mel bands with
+      line noise and destabilizes the scores."""
+    mfcc = extract_mfcc(audio, sr=sr, f_max=f_max, cms=False)
     if mfcc is None or len(mfcc) == 0:
         return None
-    return mfcc.mean(axis=0)
+    return np.concatenate([mfcc.mean(axis=0), mfcc.std(axis=0)])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,6 +213,21 @@ class SpeakerVerifier:
         enabled                  Set to False to bypass all verification.
     """
 
+    #: Utterances shorter than this carry too little phonetic material for a
+    #: stable mean-MFCC voiceprint — a bare "हो"/"ok" from the REAL caller can
+    #: score arbitrarily low. Such utterances are never rejected and never used
+    #: for enrollment; they pass through to STT unverified.
+    MIN_DECISION_S = 0.8
+
+    #: EMA weight for adapting the speaker model with each VERIFIED utterance,
+    #: so the voiceprint follows the caller as they get louder/softer/emotional
+    #: over the call instead of staying frozen on the first three utterances.
+    ADAPT_ALPHA = 0.10
+
+    #: Upper analysis band. Telephone audio carries voice to ~3.4 kHz — bands
+    #: above that are line noise that destabilizes every score.
+    F_MAX = 3800.0
+
     def __init__(
         self,
         sample_rate: int = 16000,
@@ -213,6 +245,10 @@ class SpeakerVerifier:
         self._embeddings: list[np.ndarray] = []
         self._speaker_model: Optional[np.ndarray] = None
         self._utterance_count = 0
+        # A single low-similarity dip can be the real caller (odd phonetics,
+        # a cough, line noise). Only two CONSECUTIVE hard-reject scores actually
+        # suppress — sustained foreign audio (TV, another speaker) still trips it.
+        self._pending_reject = False
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -245,7 +281,16 @@ class SpeakerVerifier:
                 verified=True, rejected=False, utterance_no=utt_no,
             )
 
-        emb = embed(audio, sr=self.sr)
+        # Too short for a reliable decision → pass through, never reject,
+        # never enroll from it.
+        if len(audio) < self.MIN_DECISION_S * self.sr:
+            log.debug("speaker: utterance too short for a decision (utt %d)", utt_no)
+            return VerificationResult(
+                is_enrolled=self.is_enrolled, similarity=1.0,
+                verified=False, rejected=False, utterance_no=utt_no,
+            )
+
+        emb = embed(audio, sr=self.sr, f_max=self.F_MAX)
         if emb is None:
             log.debug("speaker: utterance too short to embed (utt %d)", utt_no)
             return VerificationResult(
@@ -273,7 +318,18 @@ class SpeakerVerifier:
         # ── verification phase ───────────────────────────────────────────────
         sim = _cosine_sim(emb, self._speaker_model)
         verified = sim >= self.threshold
-        rejected = sim < self.threshold * self.rejection_ratio
+        raw_reject = sim < self.threshold * self.rejection_ratio
+
+        # debounce: suppress only on the SECOND consecutive hard-reject score
+        rejected = raw_reject and self._pending_reject
+        self._pending_reject = raw_reject
+
+        if verified:
+            # adapt the voiceprint so it follows the caller across the call
+            self._speaker_model = (
+                (1.0 - self.ADAPT_ALPHA) * self._speaker_model
+                + self.ADAPT_ALPHA * emb
+            )
 
         result = VerificationResult(
             is_enrolled=True,
@@ -282,7 +338,9 @@ class SpeakerVerifier:
             rejected=rejected,
             utterance_no=utt_no,
         )
-        log.info("speaker: %s", result)
+        log.info("speaker: %s%s", result,
+                 " (first low score — passing, will reject if repeated)"
+                 if raw_reject and not rejected else "")
         return result
 
     def reset(self) -> None:
@@ -290,6 +348,7 @@ class SpeakerVerifier:
         self._embeddings.clear()
         self._speaker_model = None
         self._utterance_count = 0
+        self._pending_reject = False
         log.info("speaker verifier reset")
 
 

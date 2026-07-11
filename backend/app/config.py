@@ -115,8 +115,14 @@ class Settings(BaseSettings):
     # 3-utterance enrollment window, making the agent appear unresponsive.
     # Enable only in controlled telephony environments (Exotel, fixed headset).
     speaker_verify_enabled: bool = False
-    speaker_verify_threshold: float = 0.60         # cosine similarity minimum
-    speaker_verify_rejection_ratio: float = 0.70   # hard-reject if sim < threshold×ratio
+    # NOTE: telephony sessions (Exotel) force-enable verification regardless of
+    # the flag above — a phone leg is the stable environment it was built for.
+    # Threshold 0.50: with the analysis band capped at the telephone band
+    # (speaker_verifier.F_MAX) same-voice scores are stable, but 0.60 still
+    # rejected real callers on unusual phonetics. Hard suppression additionally
+    # requires TWO consecutive scores below threshold×ratio.
+    speaker_verify_threshold: float = 0.50         # cosine similarity minimum
+    speaker_verify_rejection_ratio: float = 0.60   # hard-reject if sim < threshold×ratio
     speaker_verify_enrollment_utterances: int = 3  # clean utterances needed to enrol
 
     # ── Exotel telephony (bidirectional Voicebot streaming) ──
