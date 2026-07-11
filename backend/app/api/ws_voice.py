@@ -53,9 +53,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-import ast
 import numpy as np
-import websockets
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..audio.endpointing import Endpointer, EventType
 from ..audio.pipeline import AudioPipeline
@@ -67,6 +66,7 @@ from ..conversation.numbers import looks_like_number_fragment
 from ..conversation.state import CallState, CallStateMachine
 
 log = logging.getLogger(__name__)
+router = APIRouter()
 
 # Shared thread-pool for CPU-bound audio processing (AGC, spectral gate, AEC,
 # noisereduce).  Running these synchronously in the event loop blocks the WS
@@ -75,10 +75,9 @@ _AUDIO_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="audio")
 
 
 class VoiceSession:
-    def __init__(self, ws, deps, metadata: dict):
+    def __init__(self, ws: WebSocket, deps):
         self.ws = ws
         self.deps = deps
-        self.metadata = metadata
         self.s: Settings = deps.settings
         self.session_id = uuid.uuid4().hex[:12]
 
@@ -153,6 +152,7 @@ class VoiceSession:
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        await self.ws.accept()
         await self._send({"type": "ready", "session_id": self.session_id})
         log.info("session %s: call started", self.session_id)
 
@@ -174,12 +174,15 @@ class VoiceSession:
         )
 
         try:
-            async for msg in self.ws:
-                if isinstance(msg, bytes):
-                    await self._on_audio(msg)
-                elif isinstance(msg, str):
-                    await self._on_control(json.loads(msg))
-        except websockets.exceptions.ConnectionClosed:
+            while True:
+                msg = await self.ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                if (data := msg.get("bytes")) is not None:
+                    await self._on_audio(data)
+                elif (text := msg.get("text")) is not None:
+                    await self._on_control(json.loads(text))
+        except WebSocketDisconnect:
             pass
         finally:
             await self._teardown()
@@ -607,7 +610,7 @@ class VoiceSession:
                 # Feed TTS PCM as AEC reference BEFORE sending to client so the
                 # reference buffer stays synchronised with what the speaker plays.
                 self.pipeline.feed_tts_reference(pcm, self.s.tts_sample_rate)
-                await self.ws.send(pcm)
+                await self.ws.send_bytes(pcm)
                 self._advance_playhead(pcm)
             await self._send({"type": "audio_end"})
         except asyncio.CancelledError:
@@ -779,54 +782,17 @@ class VoiceSession:
 
     async def _send(self, obj: dict) -> None:
         try:
-            await self.ws.send(json.dumps(obj, ensure_ascii=False))
-        except (RuntimeError, websockets.exceptions.ConnectionClosed):
+            await self.ws.send_text(json.dumps(obj, ensure_ascii=False))
+        except (RuntimeError, WebSocketDisconnect):
             pass  # socket already closed / client hung up mid-teardown
         except Exception:
-            # Any transport-level disconnect (connection closing) during teardown
+            # Any transport-level disconnect (uvicorn ClientDisconnected,
+            # starlette WebSocketDisconnect, connection closing) during teardown
             # must not surface as an unretrieved task exception. _send is
             # best-effort telemetry; if the socket is gone there is nothing to do.
             pass
 
 
-class WebSocketServer:
-    def __init__(self, host, port, deps):
-        self.host = host
-        self.port = port
-        self.deps = deps
-
-    async def handle_connection(self, websocket):
-        connection_id = uuid.uuid4().hex[:12]
-        remote_ip, remote_port = websocket.remote_address if websocket.remote_address else ("UNKNOWN", 0)
-        log.info(f"Connection attempt from {remote_ip}:{remote_port}")
-        
-        # Wait for initial metadata (Exotel way)
-        try:
-            first_message = await websocket.recv()
-            if isinstance(first_message, str):
-                if len(first_message) > 2 and first_message.startswith('"') and first_message.endswith('"'):
-                    inner_content = first_message[1:-1]
-                    metadata_data = ast.literal_eval(inner_content)
-                    log.info(f"Initial metadata received: {metadata_data}")
-                else:
-                    log.error(f"Unexpected first message format: {first_message}")
-                    await websocket.close()
-                    return
-            else:
-                log.error(f"Unexpected first message type: {type(first_message)}")
-                await websocket.close()
-                return
-        except websockets.exceptions.ConnectionClosed:
-            return
-        except Exception as e:
-            log.error(f"Error receiving initial metadata: {e}")
-            await websocket.close()
-            return
-            
-        session = VoiceSession(websocket, self.deps, metadata=metadata_data)
-        await session.run()
-
-async def serve(host, port, deps):
-    server = WebSocketServer(host, port, deps)
-    async with websockets.serve(server.handle_connection, host, port):
-        await asyncio.Future()  # run forever
+@router.websocket("/ws/call")
+async def ws_call(ws: WebSocket):
+    await VoiceSession(ws, ws.app.state.deps).run()
