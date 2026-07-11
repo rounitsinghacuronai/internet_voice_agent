@@ -70,10 +70,15 @@ def _parse_sample_rate(value) -> int | None:
     return rate if rate in (8000, 16000, 24000) else None
 
 # Outbound chunking to Exotel. Must be multiples of 320 bytes; spec floor 3.2 kB,
-# ceiling 100 kB. We aim a little under the ceiling on a 320-byte boundary.
+# ceiling 100 kB. IMPORTANT: the ceiling applies to the transmitted payload, and
+# base64 inflates raw PCM by 4/3 — the old 96 kB raw ceiling produced 128 kB
+# frames, over Exotel's limit, and the stream was cancelled the moment the
+# greeting burst hit it. 32 kB raw (~1 s @ 16 kHz, ~43 kB base64) stays far
+# inside the limit, and smaller chunks also make Exotel's `clear` (barge-in)
+# take effect almost immediately instead of after a long buffered chunk.
 _MULTIPLE = 320
-_MIN_SEND = 3200      # ~100 ms @ 16 kHz — don't send jittery sub-100 ms packets
-_MAX_SEND = 96000     # < 100 kB, 320-aligned
+_MIN_SEND = 3200      # spec floor — don't send jittery sub-100 ms packets
+_MAX_SEND = 32000     # raw bytes; ~43 kB after base64, well under the 100 kB cap
 
 
 class ExotelTransport:
