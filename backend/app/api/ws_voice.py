@@ -156,8 +156,22 @@ class VoiceSession:
         self._greeting_active: bool = False
 
         # Per-turn latency breakdown (utterance → first audio byte), logged once
-        # per turn so slow stages are visible in production.
+        # per turn so slow stages are visible in production; _lat_history feeds
+        # the per-call summary at teardown.
         self._lat: dict = {}
+        self._lat_history: list[dict] = []
+
+        # Streaming STT (optional, Settings.stt_streaming_enabled): transcribes
+        # while the caller is still speaking. REST remains the fallback.
+        self._stt_stream = None
+        if getattr(self.s, "stt_streaming_enabled", False):
+            try:
+                from ..providers.sarvam_stt_stream import SarvamSTTStream
+                self._stt_stream = SarvamSTTStream(
+                    self.s, lambda: self.manager.memory.language)
+            except Exception as e:
+                log.warning("session %s: streaming STT unavailable (%s) — REST only",
+                            self.session_id, e)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -182,6 +196,11 @@ class VoiceSession:
         self._silence_task = asyncio.create_task(
             self._silence_monitor(), name=f"silence_{self.session_id}"
         )
+
+        # Open the streaming-STT socket while the greeting plays (free time).
+        if self._stt_stream is not None:
+            asyncio.create_task(self._stt_stream.start_if_needed(),
+                                name=f"sttstream_{self.session_id}")
 
         try:
             while True:
@@ -208,6 +227,12 @@ class VoiceSession:
             if t and not t.done():
                 t.cancel()
         self.pipeline.reset()
+        if self._stt_stream is not None:
+            try:
+                await self._stt_stream.close()
+            except Exception:
+                pass
+        self._log_latency_summary()
         self.im.summary_log()
         log.info(
             "session %s closed (turns=%d, interruptions=%d)",
@@ -222,6 +247,12 @@ class VoiceSession:
         self._frames_rx += 1
         if self._frames_rx == 1:
             log.info("session %s: mic audio flowing", self.session_id)
+
+        # STREAMING STT: feed every frame to Sarvam as it arrives, so the
+        # transcript is mostly done before the caller even stops speaking.
+        # Non-blocking; any stream failure silently reverts to REST.
+        if self._stt_stream is not None and not self._stt_stream.disabled:
+            self._stt_stream.feed(pcm16)
 
         peak = float(np.abs(np.frombuffer(pcm16, dtype=np.int16)).max() / 32768.0)
         self._peak = max(self._peak, peak)
@@ -419,10 +450,17 @@ class VoiceSession:
             self.sm.transition(CallState.THINKING, "utterance_received")
             await self._send({"type": "state", "value": "thinking"})
 
-            # STT — cancellable; second barge-in during STT just exits cleanly
+            # STT — cancellable; second barge-in during STT just exits cleanly.
+            # Streaming path first (transcript mostly ready already); REST fallback.
             t_stt = time.monotonic()
             try:
-                tr = await self.deps.stt.transcribe(pcm16, self.s.input_sample_rate)
+                tr = None
+                if self._stt_stream is not None and not self._stt_stream.disabled:
+                    tr = await self._stt_stream.finalize()
+                    if tr is not None:
+                        self._lat["stt_stream"] = True
+                if tr is None:
+                    tr = await self.deps.stt.transcribe(pcm16, self.s.input_sample_rate)
                 self._lat["stt_ms"] = (time.monotonic() - t_stt) * 1000
             except asyncio.CancelledError:
                 log.info("session %s: STT cancelled (second barge-in)", self.session_id)
@@ -823,6 +861,23 @@ class VoiceSession:
             self.session_id, lat.get("pipe_ms", 0), lat["stt_ms"],
             max(llm_ms, 0), tts_ms, total, int(self.endpointer.end_silence_ms),
         )
+        self._lat_history.append({
+            "pipe": lat.get("pipe_ms", 0.0), "stt": lat["stt_ms"],
+            "llm": max(llm_ms, 0.0), "tts": tts_ms, "total": total,
+        })
+
+    def _log_latency_summary(self) -> None:
+        """Per-call latency report at teardown: avg and worst per stage."""
+        hist = self._lat_history
+        if not hist:
+            return
+        n = len(hist)
+        parts = []
+        for k in ("pipe", "stt", "llm", "tts", "total"):
+            vals = [h[k] for h in hist]
+            parts.append(f"{k} avg={sum(vals)/n:.0f} max={max(vals):.0f}")
+        log.info("session %s: LATENCY SUMMARY over %d turns | %s | target total<2000ms",
+                 self.session_id, n, " | ".join(parts))
 
     def _advance_playhead(self, pcm: bytes) -> None:
         """Advance the server's copy of the client playback clock as PCM is sent.

@@ -63,6 +63,9 @@ class SarvamTTS:
         # gender-matched default (male→advait, female→ritu — see persona.py).
         self.speaker = settings.tts_speaker or get_persona(settings).voice
         self._cache: OrderedDict[str, bytes] = OrderedDict()
+        # streaming TTS state (Settings.tts_streaming_enabled)
+        self._stream_client = None
+        self._stream_disabled = False   # tripped on pre-first-chunk failure
         # key → in-flight synthesis task, so prefetch() and synthesize() of the
         # same line share ONE network call instead of racing duplicates.
         self._inflight: dict[str, asyncio.Task] = {}
@@ -146,10 +149,68 @@ class SarvamTTS:
                          pace: float | None = None) -> AsyncIterator[bytes]:
         """Synthesize one line. `pace` is the per-utterance pace planned by the
         Human Speech Engine (Voice Director style pace, dropped for long
-        numbers); falls back to the global Settings.tts_pace when None."""
+        numbers); falls back to the global Settings.tts_pace when None.
+
+        When Settings.tts_streaming_enabled is on and the line isn't cached,
+        chunks are yielded PROGRESSIVELY from Sarvam's TTS WebSocket — first
+        audio in ~200 ms instead of waiting for full synthesis (~350–500 ms).
+        Any streaming failure falls back to the REST path transparently."""
         text = text.strip()
         if not text:
             return
-        pcm = await self._synthesize_full(text, language, pace or self.s.tts_pace)
+        p = pace or self.s.tts_pace
+        key = self._key(text, language, p)
+        if (getattr(self.s, "tts_streaming_enabled", False)
+                and key not in self._cache and not self._stream_disabled):
+            got_any = False
+            collected = bytearray()
+            try:
+                async for pcm in self._synthesize_ws(text, language, p):
+                    got_any = True
+                    collected.extend(pcm)
+                    yield pcm
+                if collected:                       # feed the cache for repeats
+                    self._cache[key] = bytes(collected)
+                    while len(self._cache) > 256:
+                        self._cache.popitem(last=False)
+                return
+            except Exception as e:
+                if got_any:
+                    log.warning("tts-stream: failed mid-stream (%s)", e)
+                    return                          # partial audio already sent
+                log.warning("tts-stream: failed before first chunk (%s) — REST "
+                            "fallback for this session", e)
+                self._stream_disabled = True
+        pcm = await self._synthesize_full(text, language, p)
         for i in range(0, len(pcm), _CHUNK):
             yield pcm[i : i + _CHUNK]
+
+    async def _synthesize_ws(self, text: str, lang: str,
+                             pace: float) -> AsyncIterator[bytes]:
+        """One-shot streaming synthesis over Sarvam's TTS WebSocket. Yields raw
+        PCM16 chunks at Settings.tts_sample_rate as they are generated."""
+        from sarvamai import AsyncSarvamAI, AudioOutput   # optional dependency
+        if self._stream_client is None:
+            self._stream_client = AsyncSarvamAI(
+                api_subscription_key=self.s.sarvam_api_key)
+        async with self._stream_client.text_to_speech_streaming.connect(
+                model=self.s.tts_model, send_completion_event=True) as ws:
+            await ws.configure(
+                target_language_code=_LANG_CODE.get(lang, "mr-IN"),
+                speaker=self.speaker,
+                pace=pace,
+                speech_sample_rate=self.s.tts_sample_rate,
+                output_audio_codec="pcm",           # LINEAR16 — no decode step
+            )
+            await ws.convert(text)
+            await ws.flush()
+            async for message in ws:
+                if isinstance(message, AudioOutput):
+                    chunk = base64.b64decode(message.data.audio)
+                    pcm = _strip_wav_header(chunk)
+                    if pcm:
+                        yield pcm
+                else:                                # completion / event message
+                    ev = getattr(getattr(message, "data", None), "event_type", "")
+                    if ev == "final":
+                        break

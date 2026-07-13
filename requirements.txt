@@ -11,3 +11,4 @@ noisereduce>=3.0         # server-side noise suppression (optional)
 qdrant-client>=1.9       # production vector DB (optional; in-memory fallback built in)
 pymupdf>=1.24            # knowledge ingestion (offline)
 pytest>=8.0              # tests
+sarvamai>=0.1.14        # streaming STT/TTS WebSocket SDK (stt/tts_streaming_enabled)

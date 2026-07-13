@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     tts_speaker: str = ""
     tts_pace: float = 1.0             # calm, unhurried customer-care delivery
     tts_sample_rate: int = 24000
+    # ── streaming providers (sub-1.1s latency; needs `pip install sarvamai`) ──
+    # STT over WebSocket: transcribes WHILE the caller speaks — final transcript
+    # ~150ms after end-of-speech instead of a 350-700ms REST round trip. Falls
+    # back to REST automatically on any error. NOTE: streams silence too, so
+    # STT billing rises (~₹0.5/min vs ~₹0.21/min).
+    stt_streaming_enabled: bool = False
+    # TTS over WebSocket: first audio chunk in ~200ms instead of waiting for
+    # full-sentence synthesis. Cache misses only; falls back to REST on error.
+    tts_streaming_enabled: bool = False
 
     # ── Gemini ──
     gemini_api_key: str = ""
@@ -168,7 +177,10 @@ class Settings(BaseSettings):
     max_tool_rounds: int = 4
     verify_ttl_s: int = 1800           # hard verify-gate window
     llm_timeout_s: float = 30.0
-    history_max_turns: int = 40
+    # History cap (messages, not turns — sentences commit individually). 24
+    # messages ≈ 6–9 conversational turns of context: ample for a utility call,
+    # and every message beyond that adds input tokens → LLM TTFT. Was 40.
+    history_max_turns: int = 24
 
     # ── silence / no-response handling ──
     # When the agent has finished speaking and is waiting for the caller, but the

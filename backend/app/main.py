@@ -103,6 +103,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("TTS pre-warm failed (%s) — first call will synthesize live", e)
 
+    # PERFORMANCE: pre-warm the Gemini connection (TLS + HTTP session) so the
+    # first real turn of the first call doesn't pay a cold-connection round trip
+    # (~150–400 ms) on top of generation. One tiny non-streaming completion.
+    try:
+        llm = app.state.deps.llm
+        await llm.complete([{"role": "user", "content": "ok"}], temperature=0.0)
+        log.info("Gemini connection pre-warmed")
+    except Exception as e:
+        log.warning("Gemini pre-warm failed (%s) — first turn pays connection setup", e)
+
     log.info("Mahavitaran Voice up — model=%s stt=%s tts=%s kb_chunks=%d exotel=%s@%dHz",
              settings.gemini_model, settings.stt_model, settings.tts_model,
              len(retriever.chunks), settings.exotel_enabled, settings.exotel_sample_rate)
