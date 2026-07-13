@@ -12,6 +12,13 @@ ROOT = Path(__file__).resolve().parents[2]  # repo root
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
+    # ── persona (single source of identity — see backend/app/persona.py) ──
+    # Changing ONLY these transforms the whole assistant: name, greeting,
+    # first-person grammar in Marathi/Hindi, prompts, and default voice.
+    agent_name: str = "Ratan"
+    agent_gender: str = "male"         # male | female
+    agent_role: str = "customer care executive"
+
     # ── server ──
     host: str = "0.0.0.0"
     port: int = 8000
@@ -25,7 +32,9 @@ class Settings(BaseSettings):
     stt_mode: str = "codemix"          # transcribe|codemix|translit|translate
     stt_language: str = "unknown"      # per-utterance auto-detect
     tts_model: str = "bulbul:v3"
-    tts_speaker: str = "advait"       # male v3 voice
+    # Empty = auto-select by AGENT_GENDER (male→advait, female→ritu, see persona.py).
+    # Set explicitly to pin any Bulbul v3 speaker.
+    tts_speaker: str = ""
     tts_pace: float = 1.0             # calm, unhurried customer-care delivery
     tts_sample_rate: int = 24000
 

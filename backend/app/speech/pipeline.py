@@ -14,6 +14,7 @@ Settings.speech_llm_restructure is on (higher human-feel, some added latency).
 from __future__ import annotations
 
 from ..config import Settings
+from ..persona import get_persona
 from .director import VoiceDirector
 from .engine import HumanSpeechEngine
 from .formatter import SarvamFormatter
@@ -28,6 +29,10 @@ from .variation import VariationTracker
 class SpeechDirector:
     def __init__(self, settings: Settings, llm=None):
         self.s = settings
+        # Persona validation layer: every spoken line passes through
+        # persona.enforce_gender() as the last text stage before TTS formatting,
+        # so an opposite-gender slip never reaches the caller.
+        self.persona = get_persona(settings)
         self.director = VoiceDirector()
         self.optimizer = ResponseOptimizer(llm)
         self.engine = HumanSpeechEngine()
@@ -64,6 +69,12 @@ class SpeechDirector:
     # ── shared tail: engine → prosody → numbers → formatter ───────────────────
     def _finish(self, cleaned: str, raw_in: str, lang: str, profile: StyleProfile,
                 ctx: SpeechContext, notes: list[str]) -> SpokenPlan:
+        # ── persona gender validation (deterministic, last text stage) ──
+        corrected = self.persona.enforce_gender(cleaned, lang)
+        if corrected != cleaned:
+            notes.append("gender-fix")
+            cleaned = corrected
+
         segments = self.engine.shape(cleaned, lang, profile, ctx, self.variation)
         segments = self.prosody.plan(segments, lang, profile, ctx)
 

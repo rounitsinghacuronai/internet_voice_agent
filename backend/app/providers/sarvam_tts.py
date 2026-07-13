@@ -18,6 +18,7 @@ from typing import AsyncIterator
 import httpx
 
 from ..config import Settings
+from ..persona import get_persona
 from .base import ProviderError
 
 log = logging.getLogger(__name__)
@@ -58,13 +59,16 @@ class SarvamTTS:
     def __init__(self, settings: Settings, client: httpx.AsyncClient):
         self.s = settings
         self.client = client
+        # Voice resolution: explicit TTS_SPEAKER wins; otherwise the persona's
+        # gender-matched default (male→advait, female→ritu — see persona.py).
+        self.speaker = settings.tts_speaker or get_persona(settings).voice
         self._cache: OrderedDict[str, bytes] = OrderedDict()
         # key → in-flight synthesis task, so prefetch() and synthesize() of the
         # same line share ONE network call instead of racing duplicates.
         self._inflight: dict[str, asyncio.Task] = {}
 
     def _key(self, text: str, lang: str, pace: float) -> str:
-        raw = f"{text}|{lang}|{self.s.tts_speaker}|{pace}|{self.s.tts_sample_rate}"
+        raw = f"{text}|{lang}|{self.speaker}|{pace}|{self.s.tts_sample_rate}"
         return hashlib.sha1(raw.encode()).hexdigest()
 
     async def _synthesize_full(self, text: str, lang: str, pace: float) -> bytes:
@@ -85,7 +89,7 @@ class SarvamTTS:
             "model": self.s.tts_model,
             "text": text,
             "target_language_code": _LANG_CODE.get(lang, "mr-IN"),
-            "speaker": self.s.tts_speaker,
+            "speaker": self.speaker,
             "pace": pace,
             "speech_sample_rate": self.s.tts_sample_rate,
             "enable_preprocessing": True,

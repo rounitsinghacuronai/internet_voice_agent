@@ -29,19 +29,9 @@ _HAZARDS: list[tuple[str, str]] = [
     (r"chingari|thinag", "sparking"),
 ]
 
-# fixed spoken safety lines (never LLM-generated; reviewed wording)
-SAFETY_LINES: dict[str, dict[str, str]] = {
-    "generic": {
-        "mr": "कृपया त्या ठिकाणापासून लगेच दूर व्हा आणि कुणालाही जवळ जाऊ देऊ नका. मी ही आपत्कालीन तक्रार लगेच नोंदवतो.",
-        "hi": "कृपया उस जगह से तुरंत दूर हो जाइए और किसी को भी पास मत जाने दीजिए. मैं यह इमरजेंसी शिकायत अभी दर्ज कर रहा हूँ.",
-        "en": "Please move well away from it right now and keep everyone back. I am logging this emergency immediately.",
-    },
-    "electric_shock": {
-        "mr": "आधी मेन स्विच बंद करा. त्या व्यक्तीला हाताने अजिबात स्पर्श करू नका — फक्त कोरड्या लाकडी काठीने बाजूला करा. मी ही आपत्कालीन तक्रार लगेच नोंदवतो.",
-        "hi": "पहले मेन स्विच बंद कीजिए. उस व्यक्ति को हाथ से बिल्कुल मत छूइए — सिर्फ सूखी लकड़ी की छड़ी से हटाइए. मैं यह इमरजेंसी शिकायत अभी दर्ज कर रहा हूँ.",
-        "en": "Switch off the main supply first. Do not touch the person with bare hands — move them only with a dry wooden stick. I am logging this emergency immediately.",
-    },
-}
+# Fixed spoken safety lines (never LLM-generated; reviewed wording) now live in
+# backend/app/persona.py, generated with the configured agent's grammatical
+# gender — this module stays identity-neutral.
 
 
 @dataclass
@@ -62,6 +52,10 @@ def assess(text: str) -> SafetyVerdict:
     return SafetyVerdict(False)
 
 
-def safety_line(verdict: SafetyVerdict, language: str) -> str:
+def safety_line(verdict: SafetyVerdict, language: str, persona) -> str:
+    """Fixed safety line in the caller's language, worded for the configured
+    persona's grammatical gender (PersonaContext from backend/app/persona.py)."""
     lang = language if language in ("mr", "hi", "en") else "mr"  # Maharashtra default
-    return SAFETY_LINES[verdict.line_key][lang]
+    table = (persona.safety_shock if verdict.line_key == "electric_shock"
+             else persona.safety_generic)
+    return table[lang]

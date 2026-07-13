@@ -16,8 +16,8 @@ from .api import rest, ws_voice
 from .telephony import exotel
 from .audio.vad import load_vad_session
 from .config import Settings, get_settings
-from .conversation.manager import GREETING
 from .logging_setup import setup_logging
+from .persona import get_persona
 from .providers.embeddings import make_embedder
 from .providers.gemini_llm import GeminiLLM
 from .providers.sarvam_stt import SarvamSTT
@@ -83,13 +83,13 @@ async def lifespan(app: FastAPI):
     # SpeechDirector path a live call uses, so the cache key (exact text + pace)
     # is guaranteed to match at runtime.
     try:
-        from .conversation.manager import _APOLOGY, _SILENCE_NUDGE
         from .speech.pipeline import SpeechDirector
         from .speech.plan import StyleName
 
-        fixed_lines = [(GREETING, "mr", StyleName.GREETING),
-                       (_SILENCE_NUDGE["mr"], "mr", StyleName.DEFAULT),
-                       (_APOLOGY["mr"], "mr", StyleName.DEFAULT)]
+        persona = get_persona(settings)
+        fixed_lines = [(persona.greeting, "mr", StyleName.GREETING),
+                       (persona.silence_nudge["mr"], "mr", StyleName.DEFAULT),
+                       (persona.apology["mr"], "mr", StyleName.DEFAULT)]
         if settings.speech_enabled:
             director = SpeechDirector(settings)
             to_warm = [(p.text, p.language, p.pace) for p in

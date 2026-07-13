@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator
 
 from ..config import Settings
+from ..persona import get_persona
 from ..prompts.loader import compose_system_prompt
 from ..providers.base import LLMProvider, ProviderError
 from ..speech.director import detect_caller_emotion
@@ -79,28 +80,10 @@ _PAUSE_SPLIT = re.compile(r"(?<=[,،—])\s+")
 # genuinely long run-on sentence now splits early, and only for first-audio latency.
 _FORCE_FLUSH_CHARS = 160
 
-GREETING = "महावितरण ग्राहक सेवा केंद्रात आपले स्वागत आहे. मी रतन, आपली कशा प्रकारे मदत करू शकतो?"
-
-_APOLOGY = {
-    "mr": "माफ करा, थोडी तांत्रिक अडचण आली. कृपया पुन्हा सांगाल का?",
-    "hi": "माफ़ कीजिए, थोड़ी तकनीकी दिक्कत आ गई. कृपया दोबारा बताइए?",
-    "en": "Sorry, I hit a small technical issue. Could you say that again?",
-}
-
-# Gentle re-prompt when the caller goes silent (spoken in the caller's language).
-_SILENCE_NUDGE = {
-    "mr": "हॅलो, आपण तिथे आहात का? मी आपली कशी मदत करू शकतो?",
-    "hi": "हैलो, क्या आप वहाँ हैं? मैं आपकी कैसे मदद कर सकता हूँ?",
-    "en": "Hello, are you still there? How may I help you?",
-}
-
-# Final no-response announcement + official closing, per the training manual's
-# "NO RESPONSE" flow — spoken once before the call is disconnected.
-_NO_RESPONSE_CLOSING = {
-    "mr": "तुमच्याकडून कोणतेही प्रतिउत्तर न आल्यामुळे आपला कॉल डिस्कनेक्ट करण्यात येत आहे. महावितरणमध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो.",
-    "hi": "आपकी ओर से कोई प्रति-उत्तर न आने के कारण आपका कॉल डिस्कनेक्ट किया जा रहा है. महावितरण में संपर्क करने के लिए धन्यवाद. आपका दिन शुभ रहे.",
-    "en": "As there's no response from your side, this call is being disconnected. Thank you for calling Mahavitaran. Have a nice day.",
-}
+# NOTE: all identity-bearing fixed lines (greeting, silence nudge, closings,
+# safety, emergency follow-ups) live in backend/app/persona.py — the single
+# source of truth for the agent's name, gender, and grammar. Nothing here may
+# hard-code a name or a gendered verb form.
 
 
 def _lang_for(memory_lang: str, table: dict) -> str:
@@ -129,6 +112,8 @@ class ConversationManager:
         self.s = settings
         self.llm = llm
         self.tools = tools
+        # PERSONA LOCK: resolved once at session start; immutable for the call.
+        self.persona = get_persona(settings)
         self.memory = CallMemory(session_id=session_id)
         self.lang = LanguageEngine()
         self.topic = TopicStability()
@@ -232,20 +217,21 @@ class ConversationManager:
 
     # ── public API ───────────────────────────────────────────────────────────
     def greeting(self) -> TurnChunk:
-        self.memory.history.append({"role": "assistant", "content": GREETING})
-        return self._voice_fixed(GREETING, "mr", StyleName.GREETING)
+        text = self.persona.greeting
+        self.memory.history.append({"role": "assistant", "content": text})
+        return self._voice_fixed(text, "mr", StyleName.GREETING)
 
     def silence_nudge(self) -> TurnChunk:
         """Gentle re-prompt spoken when the caller has gone silent."""
-        lang = _lang_for(self.memory.language, _SILENCE_NUDGE)
-        text = _SILENCE_NUDGE[lang]
+        lang = _lang_for(self.memory.language, self.persona.silence_nudge)
+        text = self.persona.silence_nudge[lang]
         self.memory.history.append({"role": "assistant", "content": text})
         return self._voice_fixed(text, lang, StyleName.DEFAULT)
 
     def no_response_closing(self) -> TurnChunk:
         """Final announcement + official closing before disconnecting on no-response."""
-        lang = _lang_for(self.memory.language, _NO_RESPONSE_CLOSING)
-        text = _NO_RESPONSE_CLOSING[lang]
+        lang = _lang_for(self.memory.language, self.persona.no_response_closing)
+        text = self.persona.no_response_closing[lang]
         self.memory.history.append({"role": "assistant", "content": text})
         return self._voice_fixed(text, lang, StyleName.CLOSING)
 
@@ -294,8 +280,8 @@ class ConversationManager:
             raise
         except ProviderError as e:
             log.error("turn failed: %s", e)
-            lang = active_lang if active_lang in _APOLOGY else "mr"
-            text = _APOLOGY[lang]
+            lang = active_lang if active_lang in self.persona.apology else "mr"
+            text = self.persona.apology[lang]
             self.memory.history.append({"role": "assistant", "content": text})
             yield self._voice_fixed(text, lang, StyleName.DEFAULT)
 
@@ -324,7 +310,7 @@ class ConversationManager:
     # ── emergency path ───────────────────────────────────────────────────────
     async def _emergency(self, verdict: safety.SafetyVerdict, user_text: str) -> AsyncIterator[TurnChunk]:
         lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "mr"
-        line = safety.safety_line(verdict, lang)
+        line = safety.safety_line(verdict, lang, self.persona)
         yield self._voice_fixed(line, lang, StyleName.EMERGENCY)     # speak FIRST
         location = self.memory.location or user_text[:120]
         # Safety tools: shield so barge-in cannot abort these critical writes
@@ -338,11 +324,7 @@ class ConversationManager:
              "context_summary": f"{verdict.incident_type}: {user_text[:150]}"},
             self.memory,
         )
-        follow = {
-            "mr": "आपत्कालीन टीमला कळवलं आहे, ते तातडीने पोहोचतील. नक्की ठिकाण सांगू शकाल का?",
-            "hi": "इमरजेंसी टीम को सूचना दे दी है, वे तुरंत पहुँचेंगे. सटीक जगह बता दीजिए?",
-            "en": "The emergency team has been alerted and is on its way. Can you confirm the exact location?",
-        }[lang]
+        follow = self.persona.emergency_follow[lang]
         self.memory.history.append({"role": "assistant", "content": f"{line} {follow}"})
         yield self._voice_fixed(follow, lang, StyleName.EMERGENCY)
         yield TurnChunk("done")
@@ -355,7 +337,7 @@ class ConversationManager:
                         self._mood_directive()) if d
         )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
-                                       knowledge_block, directives)
+                                       knowledge_block, directives, persona=self.persona)
         return [{"role": "system", "content": system},
                 *self.memory.trimmed_history(self.s.history_max_turns)]
 
@@ -471,7 +453,7 @@ class ConversationManager:
             # spoken sentences for this round already committed above — nothing to bulk append
 
         log.warning("max tool rounds hit — forcing spoken close")
-        fallback = _APOLOGY[lang]
+        fallback = self.persona.apology[lang]
         self.memory.history.append({"role": "assistant", "content": fallback})
         yield self._voice_fixed(fallback, lang, StyleName.DEFAULT)
 
