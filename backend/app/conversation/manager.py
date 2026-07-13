@@ -363,8 +363,12 @@ class ConversationManager:
             buffer = ""
             spoken: list[str] = []
             tool_calls: list[dict] = []
+            t_round = time.perf_counter()
+            t_first_token: float | None = None
 
             async for delta in self.llm.stream_chat(messages, tools=self.tools.schemas):
+                if t_first_token is None and (delta.text or delta.tool_calls):
+                    t_first_token = time.perf_counter()
                 if delta.text:
                     buffer += delta.text
                     # ── primary split: sentence-ending punctuation ──────────
@@ -406,9 +410,32 @@ class ConversationManager:
                 self.memory.history.append({"role": "assistant", "content": tail})
                 yield self._voice(tail, lang)
 
+            # Per-round LLM timing — pinpoints whether a slow turn is model TTFT,
+            # generation, or the tool loop (see docs/LATENCY_AUDIT.md).
+            now = time.perf_counter()
+            log.info("turn %d round %d: llm ttft=%.0fms total=%.0fms tools=%s",
+                     self.turn_no, round_no,
+                     ((t_first_token or now) - t_round) * 1000, (now - t_round) * 1000,
+                     [c["function"]["name"] for c in tool_calls] or "none")
+
             if not tool_calls:
                 # Note: sentences already committed individually above; no bulk append needed.
                 return
+
+            # ── PERCEIVED-LATENCY SHIELD: never leave the caller in silence while
+            # tools + another LLM round run (observed: 10+ s of dead air). If the
+            # model called tools without saying anything first, speak a short,
+            # persona-correct thinking filler NOW — TTS plays it while the
+            # lookups and the next round execute.
+            if round_no == 0 and not spoken and not self.end_call_requested \
+                    and self.speech is not None:
+                from ..speech.lexicon import HESITATIONS, lang_table
+                filler = self.speech.variation.pick(
+                    f"hes:{lang}", lang_table(HESITATIONS, lang))
+                if filler:
+                    self.memory.history.append(
+                        {"role": "assistant", "content": filler + "…"})
+                    yield self._voice_fixed(filler + "…", lang, StyleName.DEFAULT)
 
             # ── tool execution — SHIELDED so barge-in cannot abort in-flight writes ──
             # content stays None: the spoken sentences were already eager-committed to

@@ -28,7 +28,8 @@ class CallState(Enum):
 # line is the signal something upstream is wrong.
 _TRANSITIONS: dict[CallState, set[CallState]] = {
     CallState.IDLE: {CallState.LISTENING, CallState.SPEAKING},
-    CallState.LISTENING: {CallState.THINKING, CallState.IDLE, CallState.LISTENING},
+    CallState.LISTENING: {CallState.THINKING, CallState.SPEAKING, CallState.IDLE,
+                          CallState.LISTENING},   # SPEAKING: silence re-prompt
     CallState.THINKING: {CallState.SPEAKING, CallState.INTERRUPTED, CallState.WAITING_FOR_USER,
                           CallState.LISTENING, CallState.IDLE},
     CallState.SPEAKING: {CallState.INTERRUPTED, CallState.WAITING_FOR_USER, CallState.LISTENING,
