@@ -442,6 +442,7 @@ class VoiceSession:
                     self.session_id,
                     result.suppression_reason,
                 )
+                self._lat = {}      # no turn ran — a stale timer would corrupt
                 self.sm.transition(CallState.LISTENING, "utterance_suppressed")
                 await self._send({"type": "state", "value": "listening"})
                 return
@@ -480,6 +481,7 @@ class VoiceSession:
                 last = self.im.last_event()
                 if last is not None:
                     self.im.flag_false_positive()
+                self._lat = {}      # no turn ran — drop the stale timer
                 self.sm.transition(CallState.LISTENING, "empty_transcript")
                 await self._send({"type": "state", "value": "listening"})
                 return
@@ -508,6 +510,7 @@ class VoiceSession:
                 if not complete:
                     # Keep listening silently — do not send a partial number to
                     # the LLM, and do not ask the caller to repeat anything.
+                    self._lat = {}  # no turn ran — drop the stale timer
                     self.sm.transition(CallState.LISTENING, "number_fragment_buffered")
                     await self._send({"type": "state", "value": "listening"})
                     return

@@ -173,8 +173,17 @@ class NumberBuffer:
         already complete and what follows is unrelated speech.
         """
         self.turns_active += 1
-        self.digits += spoken_to_digits(text)
+        incoming = spoken_to_digits(text)
         exp = self.expected_len
+        # A fragment that is ALREADY the full expected length is almost always
+        # the caller REPEATING the whole number (after a re-prompt), not a
+        # continuation — replacing avoids gluing it onto a stale partial and
+        # assembling a corrupted number (seen in production: 11 stale digits +
+        # a full 12-digit repeat -> wrong consumer number).
+        if exp is not None and len(incoming) >= exp:
+            self.digits = incoming[:exp]
+        else:
+            self.digits += incoming
         if exp is not None and len(self.digits) > exp:
             self.digits = self.digits[:exp]
         complete = exp is not None and len(self.digits) == exp
