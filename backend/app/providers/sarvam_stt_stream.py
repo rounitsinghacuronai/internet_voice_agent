@@ -96,9 +96,13 @@ class SarvamSTTStream:
                 if pcm is None:                          # flush marker
                     await self._ws.flush()
                     continue
+                # NOTE: the SDK's AudioData schema only accepts the literal
+                # "audio/wav" for `encoding` (confirmed by its own pydantic
+                # error in production); the actual codec is governed by the
+                # input_audio_codec connection parameter.
                 await self._ws.transcribe(
                     audio=base64.b64encode(pcm).decode("ascii"),
-                    encoding="pcm_s16le",
+                    encoding="audio/wav",
                     sample_rate=self.s.input_sample_rate,
                 )
         except asyncio.CancelledError:

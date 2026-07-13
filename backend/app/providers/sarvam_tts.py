@@ -188,11 +188,18 @@ class SarvamTTS:
     async def _synthesize_ws(self, text: str, lang: str,
                              pace: float) -> AsyncIterator[bytes]:
         """One-shot streaming synthesis over Sarvam's TTS WebSocket. Yields raw
-        PCM16 chunks at Settings.tts_sample_rate as they are generated."""
+        PCM16 chunks at Settings.tts_sample_rate as they are generated.
+
+        HARD RULE learned in production: if the server dislikes our config it
+        closes the socket CLEANLY — the stream then ends with zero chunks and
+        no exception, which once shipped a completely silent call. A zero-chunk
+        stream is therefore treated as a FAILURE (raise → caller falls back to
+        REST), never as success."""
         from sarvamai import AsyncSarvamAI, AudioOutput   # optional dependency
         if self._stream_client is None:
             self._stream_client = AsyncSarvamAI(
                 api_subscription_key=self.s.sarvam_api_key)
+        got_audio = False
         async with self._stream_client.text_to_speech_streaming.connect(
                 model=self.s.tts_model, send_completion_event=True) as ws:
             await ws.configure(
@@ -209,8 +216,14 @@ class SarvamTTS:
                     chunk = base64.b64decode(message.data.audio)
                     pcm = _strip_wav_header(chunk)
                     if pcm:
+                        got_audio = True
                         yield pcm
                 else:                                # completion / event message
                     ev = getattr(getattr(message, "data", None), "event_type", "")
                     if ev == "final":
                         break
+        if not got_audio:
+            raise ProviderError(
+                "sarvam_tts",
+                "stream closed with zero audio chunks (config likely rejected "
+                "server-side) — falling back to REST")
