@@ -26,7 +26,7 @@ _WRITE_TOOLS = {"register_complaint", "request_name_change", "request_load_chang
 _OTP_TOOLS = {"request_name_change", "request_load_change"}
 _UNGATED = {"verify_consumer", "send_otp", "verify_otp", "get_new_connection_status",
             "get_tariff_info", "track_complaint", "log_safety_incident",
-            "transfer_to_human", "search_knowledge"}
+            "transfer_to_human", "search_knowledge", "end_call"}
 
 # Number Recognition Engine hard gate: these tools take a number-type argument
 # that must be complete and well-formed before the backend is ever called.
@@ -114,6 +114,13 @@ def build_schemas() -> list[dict]:
             ["type", "location"]),
         _fn("transfer_to_human", "Transfer to a senior human executive with a one-line context summary.",
             {"reason": S, "context_summary": S}, ["reason"]),
+        _fn("end_call",
+            "Disconnect the call. Call this IN THE SAME TURN as your spoken official "
+            "closing line, when the caller has confirmed nothing else is needed, says "
+            "goodbye, or asks to hang up. The call ends only after your final words "
+            "finish playing. NEVER call this while an issue is still unresolved or "
+            "before speaking the official closing.",
+            {"reason": {**S, "description": "resolved | caller_goodbye | caller_request"}}),
     ]
 
 
@@ -140,6 +147,11 @@ class ToolRegistry:
         return result
 
     async def _dispatch_inner(self, name: str, args: dict, memory: CallMemory) -> dict:
+        if name == "end_call":
+            # No backend work — ConversationManager sets its end flag and the
+            # transport disconnects after the final audio finishes playing.
+            return {"status": "ok", "message": "Call will disconnect after your "
+                    "current spoken lines finish playing. Say nothing further."}
         if name == "search_knowledge":
             if self.retriever is None:
                 return {"error": "knowledge_unavailable"}

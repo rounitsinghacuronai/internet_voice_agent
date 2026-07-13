@@ -125,3 +125,19 @@ def test_persona_is_cached_and_stable():
 def test_invalid_gender_falls_back_to_male():
     p = get_persona(_settings("X", "attack-helicopter"))
     assert p.gender == "male"
+
+
+# ── end_call tool ─────────────────────────────────────────────────────────────
+def test_end_call_tool_registered_and_ungated():
+    import asyncio
+    from backend.app.tools import registry as reg
+    from backend.app.conversation.memory import CallMemory
+    assert "end_call" in reg._UNGATED
+    names = [s["function"]["name"] for s in reg.build_schemas()]
+    assert "end_call" in names
+
+    class _R(reg.ToolRegistry):
+        def __init__(self): self.s = None; self.retriever = None; self._map = {}
+    r = _R()
+    out = asyncio.run(r._dispatch_inner("end_call", {"reason": "resolved"}, CallMemory()))
+    assert out["status"] == "ok"

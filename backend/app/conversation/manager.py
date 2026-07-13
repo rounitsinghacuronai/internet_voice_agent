@@ -114,6 +114,9 @@ class ConversationManager:
         self.tools = tools
         # PERSONA LOCK: resolved once at session start; immutable for the call.
         self.persona = get_persona(settings)
+        # Set when the model calls end_call after the official closing — the
+        # transport hangs up once the final audio has finished playing.
+        self.end_call_requested = False
         self.memory = CallMemory(session_id=session_id)
         self.lang = LanguageEngine()
         self.topic = TopicStability()
@@ -424,6 +427,11 @@ class ConversationManager:
                     args = json.loads(call["function"]["arguments"] or "{}")
                 except json.JSONDecodeError:
                     args = {}
+
+                if name == "end_call":
+                    self.end_call_requested = True
+                    log.info("turn %d: agent requested end_call (%s)",
+                             self.turn_no, args.get("reason", "unspecified"))
 
                 try:
                     result = await _shielded_dispatch(

@@ -583,6 +583,15 @@ class VoiceSession:
                 # the caller can interrupt for the whole time they hear the agent.
                 await self._drain_playback("turn")
 
+                # ── agent-initiated hangup (end_call tool after the closing) ──
+                if getattr(self.manager, "end_call_requested", False):
+                    log.info("session %s: agent ended the call (end_call)",
+                             self.session_id)
+                    self.sm.transition(CallState.WAITING_FOR_USER, "agent_end_call")
+                    await self._send({"type": "call_end"})
+                    await self.ws.close()
+                    return
+
                 # Clean completion
                 self.sm.transition(CallState.WAITING_FOR_USER, "turn_done")
                 await self._send({"type": "memory", **self.manager.memory.snapshot()})
