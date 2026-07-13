@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     stt_mode: str = "codemix"          # transcribe|codemix|translit|translate
     stt_language: str = "unknown"      # per-utterance auto-detect
     tts_model: str = "bulbul:v3"
-    tts_speaker: str = "ritu"         # female v3 voice
+    tts_speaker: str = "ratan"        # male v3 voice (best male speaker for Marathi)
     tts_pace: float = 1.0             # calm, unhurried customer-care delivery
     tts_sample_rate: int = 24000
 

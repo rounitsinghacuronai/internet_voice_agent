@@ -15,7 +15,7 @@ import re
 # equally professional openings.
 ACKS: dict[str, list[str]] = {
     "en": ["Alright", "Okay", "I see", "Got it", "Sure", "Right", "Of course", "Thanks for that"],
-    "hi": ["जी", "ठीक है", "अच्छा", "समझ गई", "जी बिलकुल", "अच्छा जी"],
+    "hi": ["जी", "ठीक है", "अच्छा", "समझ गया", "जी बिलकुल", "अच्छा जी"],
     "mr": ["बरं", "ठीक आहे", "हं", "समजलं", "जी", "बरं का"],
 }
 
@@ -25,19 +25,19 @@ ACKS: dict[str, list[str]] = {
 HESITATIONS: dict[str, list[str]] = {
     "en": ["Let me just check", "One moment", "Let me pull that up", "Let me take a look",
            "Just a second", "Let me see"],
-    "hi": ["एक मिनट, देखती हूँ", "ज़रा चेक करती हूँ", "एक सेकंड", "अभी देखती हूँ",
+    "hi": ["एक मिनट, देखता हूँ", "ज़रा चेक करता हूँ", "एक सेकंड", "अभी देखता हूँ",
            "ज़रा देखने दीजिए"],
-    "mr": ["एक मिनिट, बघते", "जरा तपासते", "एक सेकंद", "आत्ता बघते", "जरा बघू द्या"],
+    "mr": ["एक मिनिट, बघतो", "जरा तपासतो", "एक सेकंद", "आत्ता बघतो", "जरा बघू द्या"],
 }
 
 # ── empathy — one per issue, never per sentence, and varied ───────────────────
 EMPATHY: dict[str, list[str]] = {
     "en": ["I'm sorry you've had to deal with that", "That must be frustrating",
            "I understand how that feels", "Let's get this sorted", "I know that's a hassle"],
-    "hi": ["समझ सकती हूँ, परेशानी हुई होगी", "माफ़ कीजिए आपको तकलीफ़ हुई",
-           "चिंता मत कीजिए, मैं देखती हूँ", "मैं इसे ठीक करवाती हूँ"],
+    "hi": ["समझ सकता हूँ, परेशानी हुई होगी", "माफ़ कीजिए आपको तकलीफ़ हुई",
+           "चिंता मत कीजिए, मैं देखता हूँ", "मैं इसे ठीक करवाता हूँ"],
     "mr": ["मला कल्पना आहे किती त्रास होतो", "माफ करा, तुम्हाला त्रास झाला",
-           "काळजी करू नका, मी बघते", "हे मी लगेच सोडवते"],
+           "काळजी करू नका, मी बघतो", "हे मी लगेच सोडवतो"],
 }
 
 # ── small human reactions — let feeling show without announcing it ────────────
@@ -86,8 +86,8 @@ _AI_PATTERNS_RAW: list[tuple[str, dict[str, str]]] = [
     (r"\bI shall now\b", {"en": "Let me", "hi": "मैं अभी", "mr": "मी आत्ता"}),
     (r"\bThe next step is to\b", {"en": "Next,", "hi": "अब", "mr": "आता"}),
     (r"\bThe next step\b", {"en": "Next", "hi": "अब", "mr": "आता"}),
-    (r"\bPlease note that\b", {"en": "Just so you know,", "hi": "बस बता दूँ,", "mr": "एवढं सांगते,"}),
-    (r"\bPlease note\b", {"en": "Just so you know", "hi": "बस बता दूँ", "mr": "एवढं सांगते"}),
+    (r"\bPlease note that\b", {"en": "Just so you know,", "hi": "बस बता दूँ,", "mr": "एवढं सांगतो,"}),
+    (r"\bPlease note\b", {"en": "Just so you know", "hi": "बस बता दूँ", "mr": "एवढं सांगतो"}),
     (r"\bPlease be advised that\b", {"en": "", "hi": "", "mr": ""}),
     (r"\bAs an AI(?: language model)?,?\b", {"en": "", "hi": "", "mr": ""}),
     (r"\bI'm an AI(?: assistant)?,?\b", {"en": "", "hi": "", "mr": ""}),

@@ -79,7 +79,7 @@ _PAUSE_SPLIT = re.compile(r"(?<=[,،—])\s+")
 # genuinely long run-on sentence now splits early, and only for first-audio latency.
 _FORCE_FLUSH_CHARS = 160
 
-GREETING = "महावितरण ग्राहक सेवा केंद्रात आपले स्वागत आहे. मी प्रिया, आपली कशा प्रकारे मदत करू शकते?"
+GREETING = "महावितरण ग्राहक सेवा केंद्रात आपले स्वागत आहे. मी रतन, आपली कशा प्रकारे मदत करू शकतो?"
 
 _APOLOGY = {
     "mr": "माफ करा, थोडी तांत्रिक अडचण आली. कृपया पुन्हा सांगाल का?",
@@ -89,8 +89,8 @@ _APOLOGY = {
 
 # Gentle re-prompt when the caller goes silent (spoken in the caller's language).
 _SILENCE_NUDGE = {
-    "mr": "हॅलो, आपण तिथे आहात का? मी आपली कशी मदत करू शकते?",
-    "hi": "हैलो, क्या आप वहाँ हैं? मैं आपकी कैसे मदद कर सकती हूँ?",
+    "mr": "हॅलो, आपण तिथे आहात का? मी आपली कशी मदत करू शकतो?",
+    "hi": "हैलो, क्या आप वहाँ हैं? मैं आपकी कैसे मदद कर सकता हूँ?",
     "en": "Hello, are you still there? How may I help you?",
 }
 
