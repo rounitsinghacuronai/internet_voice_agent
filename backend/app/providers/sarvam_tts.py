@@ -52,6 +52,24 @@ def _strip_wav_header(data: bytes) -> bytes:
     return data[44:]
 
 
+def _parse_wav(data: bytes) -> tuple[bytes, int | None]:
+    """Return (pcm, sample_rate|None). Raw PCM passes through with rate None;
+    a RIFF blob has its fmt chunk parsed so the true rate is self-describing."""
+    if data[:4] != b"RIFF":
+        return data, None
+    rate = None
+    pos = 12
+    while pos + 8 <= len(data):
+        cid = data[pos:pos + 4]
+        size = int.from_bytes(data[pos + 4:pos + 8], "little")
+        if cid == b"fmt " and size >= 8:
+            rate = int.from_bytes(data[pos + 12:pos + 16], "little")
+        elif cid == b"data":
+            return data[pos + 8:pos + 8 + size], rate
+        pos += 8 + size + (size % 2)
+    return _strip_wav_header(data), rate
+
+
 _CHUNK = 4800 * 2  # 200 ms of 24 kHz PCM16
 
 
@@ -66,6 +84,7 @@ class SarvamTTS:
         # streaming TTS state (Settings.tts_streaming_enabled)
         self._stream_client = None
         self._stream_disabled = False   # tripped on pre-first-chunk failure
+        self._ws_cfg_known: list | None = None   # config probe result (cached)
         # key → in-flight synthesis task, so prefetch() and synthesize() of the
         # same line share ONE network call instead of racing duplicates.
         self._inflight: dict[str, asyncio.Task] = {}
@@ -190,40 +209,83 @@ class SarvamTTS:
         """One-shot streaming synthesis over Sarvam's TTS WebSocket. Yields raw
         PCM16 chunks at Settings.tts_sample_rate as they are generated.
 
-        HARD RULE learned in production: if the server dislikes our config it
-        closes the socket CLEANLY — the stream then ends with zero chunks and
-        no exception, which once shipped a completely silent call. A zero-chunk
-        stream is therefore treated as a FAILURE (raise → caller falls back to
-        REST), never as success."""
+        HARD RULES learned in production:
+        • A config the server dislikes closes the socket CLEANLY → the stream
+          ends with zero chunks and no exception. Zero chunks = FAILURE (raise
+          → REST fallback), never success.
+        • Because we cannot know which config field their WS rejects, we PROBE
+          a sequence of config shapes on first use and remember the winner.
+          WAV output is self-describing (sample rate parsed from the header),
+          so mismatched rates are resampled instead of playing chipmunked."""
         from sarvamai import AsyncSarvamAI, AudioOutput   # optional dependency
+        from ..telephony.resample import resample_pcm16
         if self._stream_client is None:
             self._stream_client = AsyncSarvamAI(
                 api_subscription_key=self.s.sarvam_api_key)
-        got_audio = False
-        async with self._stream_client.text_to_speech_streaming.connect(
-                model=self.s.tts_model, send_completion_event=True) as ws:
-            await ws.configure(
-                target_language_code=_LANG_CODE.get(lang, "mr-IN"),
-                speaker=self.speaker,
-                pace=pace,
-                speech_sample_rate=self.s.tts_sample_rate,
-                output_audio_codec="pcm",           # LINEAR16 — no decode step
-            )
-            await ws.convert(text)
-            await ws.flush()
-            async for message in ws:
-                if isinstance(message, AudioOutput):
-                    chunk = base64.b64decode(message.data.audio)
-                    pcm = _strip_wav_header(chunk)
-                    if pcm:
-                        got_audio = True
-                        yield pcm
-                else:                                # completion / event message
-                    ev = getattr(getattr(message, "data", None), "event_type", "")
-                    if ev == "final":
-                        break
-        if not got_audio:
-            raise ProviderError(
-                "sarvam_tts",
-                "stream closed with zero audio chunks (config likely rejected "
-                "server-side) — falling back to REST")
+
+        base = dict(target_language_code=_LANG_CODE.get(lang, "mr-IN"),
+                    speaker=self.speaker, pace=pace)
+        # (config-extras, assumed source sample rate when not self-describing)
+        attempts = self._ws_cfg_known or [
+            ({"output_audio_codec": "pcm",
+              "speech_sample_rate": self.s.tts_sample_rate}, self.s.tts_sample_rate),
+            ({"output_audio_codec": "wav"}, None),        # rate read from header
+            ({"output_audio_codec": "pcm"}, 22050),       # Bulbul REST default
+        ]
+
+        last_err: Exception | None = None
+        for extras, assumed_rate in attempts:
+            got_audio = False
+            src_rate = assumed_rate
+            try:
+                async with self._stream_client.text_to_speech_streaming.connect(
+                        model=self.s.tts_model, send_completion_event=True) as ws:
+                    try:
+                        await ws.configure(**base, **extras)
+                    except Exception as e:
+                        import inspect
+                        try:
+                            sig = str(inspect.signature(ws.configure))
+                        except Exception:
+                            sig = "?"
+                        log.warning("tts-stream: configure(%s) rejected client-side "
+                                    "(%s); SDK signature: %s", extras, e, sig)
+                        last_err = e
+                        continue
+                    await ws.convert(text)
+                    await ws.flush()
+                    async for message in ws:
+                        if isinstance(message, AudioOutput):
+                            chunk = base64.b64decode(message.data.audio)
+                            pcm, hdr_rate = _parse_wav(chunk)
+                            if hdr_rate:
+                                src_rate = hdr_rate
+                            if pcm:
+                                got_audio = True
+                                if src_rate and src_rate != self.s.tts_sample_rate:
+                                    pcm = resample_pcm16(
+                                        pcm, src_rate, self.s.tts_sample_rate)
+                                yield pcm
+                        else:
+                            ev = getattr(getattr(message, "data", None),
+                                         "event_type", "")
+                            if ev == "final":
+                                break
+            except Exception as e:
+                last_err = e
+                if got_audio:
+                    raise                              # mid-stream failure: stop
+                log.warning("tts-stream: attempt %s failed (%s)", extras, e)
+                continue
+            if got_audio:
+                if not self._ws_cfg_known:
+                    self._ws_cfg_known = [(extras, assumed_rate)]
+                    log.info("tts-stream: working config found: %s (src rate %s)",
+                             extras, src_rate)
+                return
+            log.warning("tts-stream: config %s accepted but produced no audio",
+                        extras)
+        raise ProviderError(
+            "sarvam_tts",
+            f"no streaming config produced audio (last error: {last_err}) — "
+            "falling back to REST")

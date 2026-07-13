@@ -254,6 +254,15 @@ class ConversationManager:
         self._update_caller_emotion(user_text)
 
         self.memory.scan_user_text(user_text)
+        # Disarm number collection once its slot is filled (by ANY path — the
+        # fragment buffer, scan_user_text, or a verify result). A stale armed
+        # buffer kept every later utterance on the slow 900 ms number-dictation
+        # endpointing, adding ~500 ms to every turn of the rest of the call.
+        nb = self.memory.number_buffer
+        if nb.active and nb.field and (
+                getattr(self.memory, nb.field, None)
+                or (nb.field == "consumer_no" and self.memory.verified)):
+            nb.clear()
         active_lang = self.lang.update(user_text, stt_lang)
         self.memory.language = active_lang
         self.memory.history.append({"role": "user", "content": user_text})
