@@ -64,9 +64,11 @@ class Settings(BaseSettings):
     vad_end_silence_number_ms: int = 900
     vad_max_utterance_s: int = 25
     # Utterance-level noise gate: drop an utterance before STT unless a frame reached
-    # this speech probability. 0.0 disables it (original behaviour — no gate). Raise
-    # (e.g. 0.7) only if the agent starts reacting to background noise.
-    speech_confirm_peak_prob: float = 0.0
+    # this speech probability. Real close-mic/phone speech peaks >0.8; TV, background
+    # chatter and line noise usually stay below 0.5 — gating at 0.5 stops the LLM
+    # reacting to background sound (and stops noise resetting the no-response
+    # disconnect). Set 0.0 to disable; raise toward 0.65 in very noisy deployments.
+    speech_confirm_peak_prob: float = 0.5
     # noisereduce is slow (~200-400 ms for 3-4 s audio) and blocks the event
     # loop, making the mic appear to freeze mid-call.  The SpectralNoiseGate
     # covers stationary noise, so noisereduce is disabled by default.

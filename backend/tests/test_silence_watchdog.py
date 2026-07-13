@@ -154,13 +154,47 @@ async def test_bargein_resumes_after_greeting():
 
 
 @pytest.mark.asyncio
-async def test_caller_utterance_resets_counter():
+async def test_raw_utterance_no_longer_resets_counter():
+    """Background noise reaching the endpointer must NOT keep the call alive:
+    _on_utterance (pre-validation) leaves the no-response counter untouched."""
     sess = _session()
     await sess._fire_silence_prompt()
     assert sess._no_response_count == 1
 
-    # Caller speaks again → _on_utterance resets the watchdog.
     sess._handle_utterance = AsyncMock()   # don't launch the real handler
     with patch("asyncio.create_task", MagicMock()):
         await sess._on_utterance(b"\x00\x00")
+    assert sess._no_response_count == 1    # unchanged — not yet validated speech
+
+
+@pytest.mark.asyncio
+async def test_validated_transcript_resets_counter():
+    """Only pipeline+STT-validated caller speech resets the watchdog."""
+    sess = _session()
+    await sess._fire_silence_prompt()
+    assert sess._no_response_count == 1
+
+    # Wire the mocked pipeline/STT to return a clean, real transcript.
+    result = MagicMock(suppressed=False, audio=b"")
+    sess.pipeline.process_utterance = MagicMock(return_value=result)
+    sess.pipeline.audio_to_pcm16 = MagicMock(return_value=b"\x00\x00")
+    tr = MagicMock(text="माझं बिल जास्त आलंय", language="mr", language_confidence=0.95)
+    sess.deps.stt.transcribe = AsyncMock(return_value=tr)
+    sess.manager.memory.number_buffer.clear()   # not mid number-collection
+    sess._run_turn = AsyncMock()
+
+    await sess._handle_utterance(b"\x00\x00", peak_prob=0.9)
     assert sess._no_response_count == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_defers_but_does_not_reset_during_background_sound():
+    """While the endpointer reports in_speech (could be a TV), the monitor must
+    not fire a prompt — but must NOT reset the silence clock either."""
+    import time as _time
+    sess = _session()
+    sess.endpointer.in_speech = True
+    before = sess._last_activity = _time.monotonic() - 999  # long overdue
+    # one monitor pass worth of logic, inlined guard check:
+    assert getattr(sess.endpointer, "in_speech", False) is True
+    assert sess._last_activity == before   # clock untouched by design

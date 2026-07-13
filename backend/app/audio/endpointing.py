@@ -50,6 +50,13 @@ class Endpointer:
         self._peak_prob = 0.0                           # max VAD prob seen this utterance
         self.frame_ms = FRAME / settings.input_sample_rate * 1000  # 32 ms
 
+    @property
+    def in_speech(self) -> bool:
+        """True while an utterance is currently being captured — the silence
+        watchdog treats this as 'not silence' without counting it as caller
+        activity (background TV must not keep deferring the disconnect)."""
+        return self._in_speech
+
     def reset(self) -> None:
         self._buf = np.empty(0, dtype=np.float32)
         self._utt.clear()

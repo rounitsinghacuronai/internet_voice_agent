@@ -274,8 +274,12 @@ class VoiceSession:
             )
 
     async def _on_speech_start(self) -> None:
-        # Any detected caller speech means they are present — reset the silence clock.
-        self._last_activity = time.monotonic()
+        # NOTE: deliberately does NOT reset the silence watchdog. VAD triggers on
+        # ANY sound — TV, background chatter, noise — and resetting here meant a
+        # noisy room deferred the no-response disconnect forever while the agent
+        # kept re-asking "how can I help". Only a VALIDATED caller utterance
+        # (post noise-gate, post voice-lock, post STT) counts as activity now;
+        # mid-utterance deferral is handled by Endpointer.in_speech in the monitor.
         log.debug(
             "session %s: speech_start (state=%s)", self.session_id, self.sm.state.value
         )
@@ -320,10 +324,11 @@ class VoiceSession:
             )
 
     async def _on_utterance(self, pcm16: bytes, peak_prob: float = 1.0) -> None:
-        """Full utterance available — launch a handler task."""
-        # Caller responded — reset the silence watchdog.
-        self._last_activity = time.monotonic()
-        self._no_response_count = 0
+        """Full utterance available — launch a handler task.
+
+        The silence watchdog is NOT reset here: this utterance may still be
+        background noise. It resets only after the pipeline + STT confirm real
+        caller speech (see _handle_utterance)."""
         if self._active_turn_task and self._active_turn_task.done():
             self._active_turn_task = None
 
@@ -440,6 +445,12 @@ class VoiceSession:
                 self.sm.transition(CallState.LISTENING, "empty_transcript")
                 await self._send({"type": "state", "value": "listening"})
                 return
+
+            # VALIDATED caller speech (survived noise gate, voice lock, and STT)
+            # — only now does the silence/no-response watchdog reset. Background
+            # noise and rejected speakers no longer keep the call alive forever.
+            self._last_activity = time.monotonic()
+            self._no_response_count = 0
 
             # ── Number Recognition Engine: if the agent is mid-collection of a
             # consumer/mobile/OTP/meter number and this utterance looks like a
@@ -704,6 +715,12 @@ class VoiceSession:
                     continue
                 if self._active_turn_task and not self._active_turn_task.done():
                     self._last_activity = time.monotonic()
+                    continue
+
+                # Mid-utterance (caller — or a TV — currently making sound):
+                # don't fire a prompt over it, but do NOT reset the clock either,
+                # so continuous background noise can't defer the disconnect.
+                if getattr(self.endpointer, "in_speech", False):
                     continue
 
                 if (
