@@ -31,6 +31,11 @@ class GeminiLLM:
             "temperature": temperature,
             "stream": stream,
         }
+        if stream:
+            # Ask the OpenAI-compatible endpoint to emit one extra SSE chunk at
+            # the end carrying token usage (empty choices, populated "usage").
+            # Without this, streaming responses report no usage at all.
+            body["stream_options"] = {"include_usage": True}
         if self.s.gemini_reasoning_effort:
             body["reasoning_effort"] = self.s.gemini_reasoning_effort
         if tools:
@@ -51,6 +56,7 @@ class GeminiLLM:
         # tool-call fragments assembled by index
         calls: dict[int, dict] = {}
         finish: str | None = None
+        usage: dict | None = None
         try:
             async with self.client.stream(
                 "POST", self.url, headers=self._headers(), json=body, timeout=self.s.llm_timeout_s
@@ -68,7 +74,14 @@ class GeminiLLM:
                         chunk = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
-                    choice = (chunk.get("choices") or [{}])[0]
+                    # The usage chunk (stream_options.include_usage) carries an
+                    # empty/absent "choices" list and a top-level "usage" dict.
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
                     delta = choice.get("delta") or {}
                     if choice.get("finish_reason"):
                         finish = choice["finish_reason"]
@@ -99,7 +112,14 @@ class GeminiLLM:
                 {"id": c["id"] or f"call_{idx}", "type": "function",
                  "function": {"name": c["name"], "arguments": json.dumps(args, ensure_ascii=False)}}
             )
-        yield LLMDelta(tool_calls=assembled, finish=finish or ("tool_calls" if assembled else "stop"))
+        if usage:
+            log.info(
+                "gemini usage: prompt=%d completion=%d total=%d",
+                usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                usage.get("total_tokens", 0),
+            )
+        yield LLMDelta(tool_calls=assembled, finish=finish or ("tool_calls" if assembled else "stop"),
+                       usage=usage)
 
     async def complete(self, messages: list[dict], temperature: float = 0.2) -> str:
         body = self._body(messages, None, temperature, stream=False)

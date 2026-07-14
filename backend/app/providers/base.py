@@ -26,6 +26,10 @@ class LLMDelta:
     text: str = ""
     tool_calls: list[dict] = field(default_factory=list)   # accumulated, complete calls
     finish: str | None = None                              # "stop" | "tool_calls" | None
+    # Token usage for this request, present only on the final delta of a stream
+    # (requires stream_options.include_usage — see providers/gemini_llm.py).
+    # {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int} or None.
+    usage: dict | None = None
 
 
 @runtime_checkable

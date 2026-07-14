@@ -51,8 +51,12 @@ class SarvamSTT:
         except httpx.HTTPError as e:
             raise ProviderError("sarvam_stt", e) from e
         body = r.json()
+        text = (body.get("transcript") or "").strip()
+        audio_s = len(pcm16) / 2 / sample_rate   # 16-bit mono
+        log.info("sarvam stt usage: audio=%.2fs → transcript=%d chars (lang=%s)",
+                 audio_s, len(text), body.get("language_code") or "unknown")
         return Transcript(
-            text=(body.get("transcript") or "").strip(),
+            text=text,
             language=body.get("language_code") or "unknown",
             raw=body,
             language_confidence=body.get("language_probability"),

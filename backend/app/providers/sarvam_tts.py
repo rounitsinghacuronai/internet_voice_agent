@@ -179,6 +179,8 @@ class SarvamTTS:
             return
         p = pace or self.s.tts_pace
         key = self._key(text, language, p)
+        log.info("sarvam tts usage: %d chars (lang=%s) — %s", len(text), language,
+                 "CACHE HIT, 0 billed" if key in self._cache else "live synthesis")
         if (getattr(self.s, "tts_streaming_enabled", False)
                 and key not in self._cache and not self._stream_disabled):
             got_any = False
