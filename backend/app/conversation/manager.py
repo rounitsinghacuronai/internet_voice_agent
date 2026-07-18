@@ -621,8 +621,23 @@ async def _late_tool_absorb(
         log.warning("late_absorb: tool '%s' failed post-barge-in: %s", name, e)
 
 
+# PROMPT-LEAKAGE GUARD. Under churn (e.g. the caller switching languages several
+# times, plus garbled code-mix STT), the model occasionally regurgitates an
+# INSTRUCTION from the system prompt verbatim instead of following it — observed
+# in production as the agent speaking "ACTIVE LANGUAGE: Marathi. Reply ENTIRELY
+# in this language…" aloud. None of these internal markers ever belong in speech,
+# so any sentence carrying one is dropped before it reaches TTS.
+_LEAK_MARKERS = re.compile(
+    r"ACTIVE LANGUAGE|CALL MEMORY|KNOWLEDGE CONTEXT|CALLER MOOD|CALLER ALREADY VERIFIED"
+    r"|GRAMMATICAL GENDER|PUNE REGION ONLY|MAHARASHTRA CIRCLE|Identity verified:"
+    r"|Reply ENTIRELY in this language|\[CALLER|\[KNOWLEDGE",
+    re.IGNORECASE,
+)
+
+
 def _sanitize(text: str) -> str:
-    """Strip anything unspeakable that slips through (markdown, labels).
+    """Strip anything unspeakable that slips through (markdown, labels, and any
+    leaked system-prompt directive — see _LEAK_MARKERS).
 
     Also strips parenthetical asides entirely. Observed in production: the model
     sometimes writes a number/code out phonetically for natural speech, then adds
@@ -636,4 +651,10 @@ def _sanitize(text: str) -> str:
     text = re.sub(r"\([^)]*\)", " ", text)
     text = re.sub(r"[*_#`]+", "", text)
     text = re.sub(r"^\s*(?:[-•]|\d+[.)])\s*", "", text, flags=re.M)
-    return re.sub(r"\s+", " ", text).strip()
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    # Drop any sentence that carries a leaked internal directive — the caller
+    # must never hear the agent's own instructions read out loud.
+    if cleaned and _LEAK_MARKERS.search(cleaned):
+        log.warning("dropped leaked prompt directive from speech: %r", cleaned[:90])
+        return ""
+    return cleaned
