@@ -28,9 +28,9 @@ _WRITE_TOOLS = {"register_complaint", "request_plan_change", "request_sim_swap",
                 "escalate_complaint", "close_complaint"}
 _OTP_TOOLS = {"request_plan_change", "request_sim_swap"}
 _UNGATED = {"verify_customer", "send_otp", "verify_otp", "get_new_connection_status",
-            "get_plan_catalog", "get_network_status", "track_complaint",
-            "log_priority_incident", "transfer_to_human", "record_feedback",
-            "search_knowledge", "end_call"}
+            "register_new_connection", "get_plan_catalog", "get_network_status",
+            "track_complaint", "log_priority_incident", "transfer_to_human",
+            "record_feedback", "search_knowledge", "end_call"}
 
 # Number Recognition Engine hard gate: these tools take a number-type argument
 # that must be complete and well-formed before the backend is ever called.
@@ -139,8 +139,19 @@ def build_schemas() -> list[dict]:
         _fn("request_sim_swap", "Request a physical SIM replacement or physical-to-eSIM "
             "conversion. swap_type: replacement | esim. Requires verification + OTP.",
             {"account_no": S, "swap_type": S}, ["account_no"]),
-        _fn("get_new_connection_status", "Stage of a new-connection application. No "
-            "verification needed.", {"application_no": S}, ["application_no"]),
+        _fn("register_new_connection",
+            "Log a NEW CONNECTION request from a prospective customer and forward it "
+            "to the operations team. NO verification and NO OTP — the caller is not an "
+            "existing subscriber. Collect and pass: name, installation address, "
+            "service_type (mobile/prepaid|postpaid|fiber|enterprise), the plan they "
+            "want, a contact_mobile to reach them on, and a preferred_slot (preferred "
+            "callback/installation time). Call this once you have these details.",
+            {"name": S, "address": S, "service_type": S, "plan": S,
+             "contact_mobile": S, "preferred_slot": S},
+            ["name", "address", "service_type", "contact_mobile"]),
+        _fn("get_new_connection_status", "Stage of an EXISTING new-connection "
+            "application (caller already has an application number). No verification "
+            "needed.", {"application_no": S}, ["application_no"]),
         _fn("get_plan_catalog", "Current plan catalog notes for a service type "
             "(prepaid|postpaid|fiber|enterprise). Never quote pack prices from memory.",
             {"service_type": S}),
@@ -183,7 +194,8 @@ class ToolRegistry:
                 "restart_ont", "register_complaint", "track_complaint",
                 "escalate_complaint", "close_complaint", "schedule_engineer_visit",
                 "block_sim", "request_plan_change", "request_sim_swap",
-                "get_new_connection_status", "get_plan_catalog",
+                "register_new_connection", "get_new_connection_status",
+                "get_plan_catalog",
                 "log_priority_incident", "transfer_to_human", "record_feedback")
         }
 
@@ -215,6 +227,12 @@ class ToolRegistry:
         fn = self._map.get(name)
         if fn is None:
             return {"error": f"unknown_tool:{name}"}
+
+        # New-connection requests are forwarded with the caller-ID origin number
+        # (the number the call actually arrived from) — injected from call memory,
+        # never trusted from the model.
+        if name == "register_new_connection" and getattr(memory, "caller_number", None):
+            args["caller_number"] = memory.caller_number
 
         # ── number-format gate (Number Recognition Engine) ──
         if (err := _validate_number_args(name, args)) is not None:

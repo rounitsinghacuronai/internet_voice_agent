@@ -123,6 +123,10 @@ class TelecomServices:
               id TEXT PRIMARY KEY, type TEXT, details TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS visits(
               id TEXT PRIMARY KEY, account_no TEXT, slot TEXT, created_at TEXT);
+            CREATE TABLE IF NOT EXISTS new_connections(
+              application_no TEXT PRIMARY KEY, name TEXT, address TEXT,
+              service_type TEXT, plan TEXT, contact_mobile TEXT,
+              preferred_slot TEXT, caller_number TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS feedback(
               id TEXT PRIMARY KEY, rating TEXT, comment TEXT, created_at TEXT);
             """)
@@ -392,6 +396,35 @@ class TelecomServices:
                 f"Replacement SIM request logged; standard processing "
                 f"{SLA_HOURS['SIM - Replacement'][0]} hours after in-store or doorstep KYC.")
         return {"submitted": True, "reference": ref, "swap_type": swap_type, "note": note}
+
+    def register_new_connection(self, name: str = "", address: str = "",
+                                service_type: str = "", plan: str = "",
+                                contact_mobile: str = "", preferred_slot: str = "",
+                                caller_number: str = "") -> dict:
+        """Log a NEW CONNECTION request. No verification/OTP — the caller is a
+        prospect, not an existing subscriber. The request is forwarded to the
+        operations WhatsApp group (via the notification observer), which owns
+        feasibility check, KYC and installation scheduling from here.
+
+        `contact_mobile` is the number the caller wants us to reach them on;
+        `caller_number` is the number the call actually arrived from (caller ID).
+        Both are carried through to the ops ticket."""
+        app_no = f"NC{datetime.now():%y%m}{uuid.uuid4().hex[:6].upper()}"
+        with self._conn() as c:
+            c.execute("INSERT INTO new_connections VALUES (?,?,?,?,?,?,?,?,?)",
+                      (app_no, name.strip(), address.strip(),
+                       service_type.strip(), plan.strip(),
+                       (contact_mobile or "").strip(), preferred_slot.strip(),
+                       (caller_number or "").strip(), datetime.now().isoformat()))
+        log.info("NEW CONNECTION %s: %s / %s / %s @ %s", app_no, name,
+                 service_type, plan, address)
+        return {"registered": True, "application_no": app_no,
+                "name": name, "service_type": service_type, "plan": plan,
+                "address": address, "contact_mobile": contact_mobile,
+                "preferred_slot": preferred_slot,
+                "note": "New connection request logged and forwarded to our "
+                        "installation team. They will call the contact number to "
+                        "confirm feasibility, KYC and an installation slot."}
 
     def get_new_connection_status(self, application_no: str) -> dict:
         rng = random.Random(application_no)

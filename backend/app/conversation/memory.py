@@ -39,6 +39,11 @@ class CallMemory:
     # identity slots
     account_no: str | None = None
     mobile: str | None = None
+    # The number the call actually arrived from (caller ID / Exotel `from`).
+    # Distinct from `mobile` (the REGISTERED mobile, filled after verification):
+    # both are forwarded to the ops WhatsApp group so the team can see who called
+    # even when it differs from the account's registered number.
+    caller_number: str | None = None
     name: str | None = None
     location: str | None = None
     service_type: str | None = None          # prepaid|postpaid|fiber|enterprise
@@ -170,6 +175,8 @@ class CallMemory:
     def snapshot(self) -> dict:
         return {
             "account_no": self.account_no, "mobile": self.mobile, "name": self.name,
+            "caller_number": self.caller_number,
+            "location": self.location,
             "service_type": self.service_type, "plan_name": self.plan_name,
             "language": self.language, "verified": self.verified,
             "complaints": [c.__dict__ for c in self.complaints],

@@ -249,6 +249,67 @@ def test_retry_async_exhaustion():
     asyncio.run(run())
 
 
+# ── new connection (no verification) + caller-origin number ──────────────────
+_NEW_CONN_ARGS = {
+    "name": "Anita Kulkarni", "address": "Baner, Pune",
+    "service_type": "fiber", "plan": "Fiber 100 Mbps Unlimited",
+    "contact_mobile": "9812312312", "preferred_slot": "tomorrow 4-6 PM",
+}
+_NEW_CONN_RESULT = {
+    "registered": True, "application_no": "NC2607AB12CD",
+    "name": "Anita Kulkarni", "service_type": "fiber",
+    "note": "New connection request logged and forwarded to our installation team.",
+}
+# A prospect is NOT verified and NOT in the DB — memory only knows the caller ID.
+_PROSPECT_MEMORY = {"verified": False, "caller_number": "9800011122"}
+
+
+def test_new_connection_notifies_without_verification(tmp_path):
+    async def run():
+        svc = _service(tmp_path)
+        svc.start()
+        svc.notify_event("register_new_connection", dict(_NEW_CONN_ARGS),
+                         dict(_NEW_CONN_RESULT), dict(_PROSPECT_MEMORY), "callNC")
+        await svc._q.join()
+        assert len(svc.sender.sent) == 1
+        _, msg = svc.sender.sent[0]
+        assert "NEW CONNECTION REQUEST" in msg
+        assert "Anita Kulkarni" in msg           # name from tool args, not memory
+        assert "Baner, Pune" in msg              # install address
+        assert "9812312312" in msg               # contact number
+        assert "9800011122" in msg               # caller-origin number
+        assert "tomorrow 4-6 PM" in msg          # preferred slot in summary
+        # verification NOT claimed for a prospect
+        assert "Account verified" not in msg
+        row = svc.store.search()[0]
+        assert row["status"] == "SENT"
+    asyncio.run(run())
+
+
+def test_ticket_shows_both_registered_and_caller_number():
+    """An existing verified caller phoning from a DIFFERENT number: both the
+    registered mobile and the call-origin number must appear, and the origin
+    must be flagged as differing."""
+    t = Ticket(ticket_id="TT-2026-9001", event_type="complaint_registered",
+               category="Mobile - Call Drops", priority="MEDIUM", summary="s",
+               customer_name="Ramesh Patil", mobile="9820012345",
+               caller_number="9700099000", account_no="300012345678",
+               service_type="postpaid")
+    msg = format_message(t)
+    assert "Registered Mobile" in msg and "9820012345" in msg
+    assert "Call Origin Number" in msg and "9700099000" in msg
+    assert "differs from registered" in msg
+
+
+def test_caller_number_hidden_when_same_as_registered():
+    t = Ticket(ticket_id="TT-2026-9002", event_type="complaint_registered",
+               category="Mobile - Call Drops", priority="MEDIUM", summary="s",
+               customer_name="Ramesh Patil", mobile="9820012345",
+               caller_number="9820012345")
+    msg = format_message(t)
+    assert "differs from registered" not in msg   # identical → no flag
+
+
 # ── dashboard search ─────────────────────────────────────────────────────────
 def test_search_matches_customer_and_status(tmp_path):
     async def run():

@@ -37,6 +37,7 @@ _TOOL_EVENTS = {
     "request_sim_swap": "esim_request",
     "log_priority_incident": "priority_incident",
     "transfer_to_human": "human_escalation",
+    "register_new_connection": "new_connection_request",
 }
 
 # result keys that prove the tool actually succeeded
@@ -48,6 +49,7 @@ _SUCCESS_KEYS = {
     "esim_request": "submitted",
     "priority_incident": "logged",
     "human_escalation": "transferred",
+    "new_connection_request": "registered",
 }
 
 # tool traces that read as troubleshooting steps in the AI summary
@@ -143,11 +145,20 @@ class NotificationService:
                         "priority_incident": f"Security - {args.get('type', 'incident')}",
                         "human_escalation": f"Escalation - {args.get('reason', 'requested')}",
                         "engineer_visit": "Engineer Visit Required",
+                        "new_connection_request": "New Connection - Request",
                         }.get(event_type, event_type))
 
+        # New-connection callers are prospects — not in the subscriber DB — so the
+        # customer fields come from what they told us on THIS call (the tool args),
+        # not from verified call memory.
+        is_new_conn = event_type == "new_connection_request"
+
         # ── duplicate detection: update, don't spam ──────────────────────────
-        mobile = memory.get("mobile") or args.get("mobile") or ""
+        # For a new connection the "contact" is the number to reach them on.
+        mobile = (memory.get("mobile")
+                  or args.get("contact_mobile") or args.get("mobile") or "")
         account = memory.get("account_no") or ""
+        caller_number = memory.get("caller_number") or args.get("caller_number") or ""
         prev = self.store.find_recent(mobile, account, category,
                                       self.s.whatsapp_dedup_window_min)
         if prev is not None:
@@ -156,6 +167,7 @@ class NotificationService:
                        category=category, priority=prev["priority"],
                        summary=prev["summary"],
                        customer_name=prev["customer_name"], mobile=mobile,
+                       caller_number=caller_number,
                        account_no=account, service_type=prev["service_type"],
                        location=prev["location"], call_id=call_id,
                        complaint_no=prev["complaint_no"],
@@ -174,11 +186,14 @@ class NotificationService:
             category=category,
             priority=derive_priority(event_type, category),
             summary=summary,
-            customer_name=memory.get("name") or "",
+            customer_name=(args.get("name") if is_new_conn else memory.get("name")) or "",
             mobile=mobile,
+            caller_number=caller_number,
             account_no=account,
-            service_type=memory.get("service_type") or "",
-            location=memory.get("location") or "",
+            service_type=(args.get("service_type") if is_new_conn
+                          else memory.get("service_type")) or "",
+            location=(args.get("address") if is_new_conn
+                      else memory.get("location")) or "",
             verified=bool(memory.get("verified")),
             call_id=call_id,
             complaint_no=(result.get("ticket_no") or result.get("visit_id")

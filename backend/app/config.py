@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     tts_speaker: str = ""
     tts_pace: float = 1.10            # global speaking rate ~1.10x; per-style pace multiplies this (clamped by speech_pace_max). Digit groups stay clear via each style's number_pace.
     tts_sample_rate: int = 24000
+    # ── OUTPUT loudness leveling ──────────────────────────────────────────────
+    # Sarvam Bulbul returns each sentence at a slightly different loudness; sent
+    # out raw, the agent's volume drifts up and down between sentences — an
+    # obvious "this is a bot" tell. This leveler pulls every sentence toward the
+    # call's own running-average level with ONE constant gain per sentence, so
+    # there is no intra-sentence pumping and no added latency. Reference-free
+    # (no fixed target to mis-tune) and deliberately gentle — it only squashes
+    # outliers, it does not flatten natural prosody.
+    tts_loudness_normalize: bool = True
+    tts_loudness_avg_alpha: float = 0.30   # EMA weight of each new sentence on the running level
+    tts_loudness_max_gain: float = 2.0     # loudest boost for a too-quiet sentence (+6 dB)
+    tts_loudness_min_gain: float = 0.5     # deepest cut for a too-loud sentence (−6 dB)
+    tts_loudness_silence_rms: float = 0.005  # below this a chunk is silence — never boosted
+    tts_loudness_limiter_ceiling: float = 0.98  # soft-clip ceiling to prevent hard clipping
     # ── streaming providers (sub-1.1s latency; needs `pip install sarvamai`) ──
     # STT over WebSocket: transcribes WHILE the caller speaks — final transcript
     # ~150ms after end-of-speech instead of a 350-700ms REST round trip. Falls

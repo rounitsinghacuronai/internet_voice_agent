@@ -58,6 +58,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..audio.endpointing import Endpointer, EventType
 from ..audio.pipeline import AudioPipeline
+from ..audio.output_loudness import OutputLoudness
 from ..audio.vad import SileroVAD
 from ..barge_in.manager import InterruptionManager
 from ..config import Settings
@@ -102,6 +103,18 @@ class VoiceSession:
             self.s, self.session_id,
             force_speaker_verify=True if is_telephony else None,
         )
+
+        # OUTPUT loudness leveling — steadies the agent's own volume between
+        # sentences (Sarvam returns each at a slightly different level). Gain is
+        # one-per-sentence so there is no pumping and no added latency; the same
+        # leveled PCM feeds both the caller and the AEC reference.
+        self._loudness = OutputLoudness(
+            avg_alpha=self.s.tts_loudness_avg_alpha,
+            max_gain=self.s.tts_loudness_max_gain,
+            min_gain=self.s.tts_loudness_min_gain,
+            silence_rms=self.s.tts_loudness_silence_rms,
+            limiter_ceiling=self.s.tts_loudness_limiter_ceiling,
+        ) if self.s.tts_loudness_normalize else None
 
         # State machine — single source of truth for what the call is doing
         self.sm = CallStateMachine(session_id=self.session_id)
@@ -183,10 +196,16 @@ class VoiceSession:
         await self._send({"type": "ready", "session_id": self.session_id})
         log.info("session %s: call started", self.session_id)
 
+        # CALLER-ID: record the number the call arrived from, ALWAYS (recognized
+        # or not). It rides along on every ops WhatsApp ticket next to the
+        # registered mobile, and is forwarded on new-connection requests.
+        caller_mobile = self._caller_mobile()
+        self.manager.memory.caller_number = caller_mobile
+
         # CALLER-ID RECOGNITION: if the call arrives from a registered mobile
         # (Exotel `from` on the phone leg, or ?from= on the browser demo), look
         # the subscriber up, preload their verified identity, and greet by name.
-        caller_first = self.manager.recognize_caller(self._caller_mobile())
+        caller_first = self.manager.recognize_caller(caller_mobile)
         if caller_first:
             log.info("session %s: recognized caller — greeting %s by name",
                      self.session_id, caller_first)
@@ -774,9 +793,15 @@ class VoiceSession:
             await self._send(msg)
             await self._send({"type": "audio_start"})
             t_tts = time.monotonic()
+            if self._loudness is not None:
+                self._loudness.start_sentence()
             async for pcm in self.deps.tts.synthesize(
                 chunk.text, chunk.language, chunk.pace
             ):
+                # Steady the per-sentence loudness BEFORE anything downstream sees
+                # it, so the caller and the AEC reference get the same leveled audio.
+                if self._loudness is not None:
+                    pcm = self._loudness.process(pcm)
                 # Feed TTS PCM as AEC reference BEFORE sending to client so the
                 # reference buffer stays synchronised with what the speaker plays.
                 self.pipeline.feed_tts_reference(pcm, self.s.tts_sample_rate)

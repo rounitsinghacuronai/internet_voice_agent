@@ -58,7 +58,8 @@ class Ticket:
     summary: str
     # customer metadata (from verified call memory — never guessed)
     customer_name: str = ""
-    mobile: str = ""
+    mobile: str = ""                    # REGISTERED mobile (after verification)
+    caller_number: str = ""             # number the call actually arrived from
     account_no: str = ""
     service_type: str = ""
     location: str = ""
@@ -83,6 +84,7 @@ _EVENT_TITLE = {
     "esim_request": "eSIM / SIM SWAP REQUEST",
     "priority_incident": "PRIORITY INCIDENT",
     "human_escalation": "HUMAN ESCALATION",
+    "new_connection_request": "NEW CONNECTION REQUEST",
 }
 
 
@@ -104,7 +106,18 @@ def format_message(t: Ticket, group_footer: bool = True) -> str:
         t.customer_name or "Unverified caller",
     ]
     if t.mobile:
-        lines += ["", "📱 Registered Mobile", t.mobile]
+        label = "📱 Contact Number" if t.event_type == "new_connection_request" \
+            else "📱 Registered Mobile"
+        lines += ["", label, t.mobile]
+    # Number the call actually arrived from (caller ID). Always shown when known
+    # — and flagged when it differs from the registered/contact number.
+    if t.caller_number:
+        origin = t.caller_number
+        if t.mobile and origin != t.mobile:
+            ref = "contact number" if t.event_type == "new_connection_request" \
+                else "registered"
+            origin += f"  (differs from {ref})"
+        lines += ["", "📞 Call Origin Number", origin]
     if t.account_no:
         lines += ["", "🆔 Account Number", t.account_no]
     lines += [
@@ -144,7 +157,9 @@ def format_follow_up(t: Ticket) -> str:
         "Customer has contacted us again regarding this issue.",
         "",
         f"👤 {t.customer_name or 'Unverified caller'}"
-        + (f" · 📱 {t.mobile}" if t.mobile else ""),
+        + (f" · 📱 {t.mobile}" if t.mobile else "")
+        + (f" · 📞 {t.caller_number}"
+           if t.caller_number and t.caller_number != t.mobile else ""),
         f"📂 {t.category}",
         f"⚠ Priority {t.priority}",
         "",
@@ -160,6 +175,22 @@ def build_summary(event_type: str, args: dict, result: dict, memory: dict,
     replace this downstream (background only) — this version never fails and
     never hallucinates: every line is a known fact from the call."""
     parts: list[str] = []
+
+    # New-connection requests have no free-text "issue" — summarise the details
+    # the caller gave so the installation team can act without replaying audio.
+    if event_type == "new_connection_request":
+        nc = [f"New {(args.get('service_type') or '').strip() or 'connection'} "
+              "request."]
+        if args.get("plan"):
+            nc.append(f"Plan wanted: {str(args['plan']).strip()}.")
+        if args.get("address"):
+            nc.append(f"Install address: {str(args['address']).strip()}.")
+        if args.get("preferred_slot"):
+            nc.append(f"Preferred slot: {str(args['preferred_slot']).strip()}.")
+        nc.append("No verification required (prospective customer).")
+        nc.append("Team to confirm feasibility, KYC and installation.")
+        return " ".join(" ".join(nc).split()[:150])
+
     desc = (args.get("description") or args.get("reason")
             or args.get("details") or "").strip()
     if desc:
