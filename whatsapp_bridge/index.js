@@ -33,6 +33,9 @@ const client = new Client({
   authStrategy: new LocalAuth({ dataPath: './session' }),
   puppeteer: {
     headless: HEADLESS,
+    // On a headless server, point at a real system Chrome (set via env in the
+    // systemd unit). undefined → puppeteer's bundled Chromium (local/dev).
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: ['--no-sandbox', '--disable-setuid-sandbox',
            '--disable-dev-shm-usage'],
   },
@@ -83,8 +86,10 @@ client.on('disconnected', (reason) => {
 });
 
 async function resolveGroup(name) {
-  // 1. Raw group id given directly (WHATSAPP_GROUP_NAME=1234567890@g.us)
-  if (name.endsWith('@g.us')) return name;
+  // 1. Raw chat id given directly: a group (…@g.us) OR an individual number
+  //    (…@c.us, e.g. 917267850755@c.us to DM your own number). Passed through
+  //    as-is — no chat lookup needed.
+  if (name.endsWith('@g.us') || name.endsWith('@c.us')) return name;
   const key = name.toLowerCase();
   // 2. Learned from message traffic (see learnGroup) or a previous lookup
   if (groupIdCache.has(key)) return groupIdCache.get(key);
