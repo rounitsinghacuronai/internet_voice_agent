@@ -64,11 +64,11 @@ _SEED_CUSTOMERS = [
      "Fiber 100 Mbps Unlimited + Landline", 799, "OK", "PAID"),
     ("300023456789", "Sunita Deshmukh", "9822233445", "Hadapsar, Pune", "postpaid",
      "Postpaid 599 — 75GB + Unlimited Calls", 599, "", "DUE"),
-    ("210034567890", "Abdul Sheikh", "9867554433", "Bhiwandi, Thane", "fiber",
+    ("210034567890", "Abdul Sheikh", "9867554433", "Kharadi, Pune", "fiber",
      "Fiber 300 Mbps Unlimited", 1499, "LOS", "PAID"),
-    ("330045678901", "Kavita Jadhav", "9700112233", "Nanded City", "prepaid",
+    ("330045678901", "Kavita Jadhav", "9700112233", "Nanded City, Pune", "prepaid",
      "Prepaid 299 — 2GB/day, 28 days", 299, "", "ACTIVE"),
-    ("410056789012", "Suresh Wagh", "9922334455", "CIDCO, Chh. Sambhajinagar", "enterprise",
+    ("410056789012", "Suresh Wagh", "9922334455", "Hinjewadi, Pune", "enterprise",
      "Enterprise Leased Line 200 Mbps 1:1", 8999, "OK", "PAID"),
     ("880012340001", "Kiran Darkunde", "8624900039", "Wakad, Pune", "fiber",
      "Fiber 100 Mbps Unlimited + Landline", 799, "OK", "PAID"),
@@ -79,7 +79,7 @@ _SEED_CUSTOMERS = [
 # (area, service affected, reason, ETA hours)
 _OUTAGES = [
     ("Kothrud, Pune", "mobile", "4G/5G tower maintenance", 3),
-    ("Bhiwandi, Thane", "fiber", "trunk fiber cut — splicing team on site", 5),
+    ("Kharadi, Pune", "fiber", "trunk fiber cut — splicing team on site", 5),
 ]
 
 _PLAN_CATALOG = {
@@ -126,11 +126,14 @@ class TelecomServices:
             CREATE TABLE IF NOT EXISTS feedback(
               id TEXT PRIMARY KEY, rating TEXT, comment TEXT, created_at TEXT);
             """)
-            # Idempotent seeding: INSERT OR IGNORE on every startup so newly added
-            # seed subscribers land in an already-created telecom.db (keyed by
-            # account_no) without wiping existing rows, tickets, or OTPs.
+            # Idempotent seeding: customers are STATIC reference data (never
+            # modified at runtime — tickets/OTPs/incidents live in their own
+            # tables), so INSERT OR REPLACE on every startup keeps the seed roster
+            # authoritative. This both adds newly listed subscribers AND refreshes
+            # edited fields (e.g. a corrected Pune address) on an existing
+            # telecom.db, without touching complaints, otps or visits.
             before = c.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
-            c.executemany("INSERT OR IGNORE INTO customers VALUES (?,?,?,?,?,?,?,?,?)",
+            c.executemany("INSERT OR REPLACE INTO customers VALUES (?,?,?,?,?,?,?,?,?)",
                           _SEED_CUSTOMERS)
             after = c.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
             if after - before:
