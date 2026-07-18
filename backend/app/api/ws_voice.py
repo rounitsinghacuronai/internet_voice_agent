@@ -389,6 +389,16 @@ class VoiceSession:
         The silence watchdog is NOT reset here: this utterance may still be
         background noise. It resets only after the pipeline + STT confirm real
         caller speech (see _handle_utterance)."""
+        # GREETING GUARD: while the opening greeting is still playing, barge-in
+        # is deliberately suppressed (the cold AEC lets the greeting echo back
+        # into the mic). Starting a turn from that echo would synthesize a reply
+        # that plays OVER the greeting — the "dual voice / fluttering" at call
+        # start. Drop utterances until the greeting finishes; the caller's real
+        # first turn is captured immediately after.
+        if self._greeting_active:
+            log.info("session %s: utterance during greeting ignored (prevents "
+                     "overlap/dual-voice)", self.session_id)
+            return
         if self._active_turn_task and self._active_turn_task.done():
             self._active_turn_task = None
 
