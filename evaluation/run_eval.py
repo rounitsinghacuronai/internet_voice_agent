@@ -1,6 +1,6 @@
 """Conversation eval harness. Drives the /chat text endpoint through scripted
 scenarios and checks behavioural invariants — the regressions that actually bit the
-old build (invented SR numbers, language non-switch, holding phrases, menus).
+old build (invented ticket numbers, language non-switch, holding phrases, menus).
 
 Usage:  python evaluation/run_eval.py [--base http://localhost:8000]
 Exit code 1 on any failure → CI-gateable.
@@ -22,8 +22,8 @@ SCENARIOS = Path(__file__).parent / "scenarios"
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 _HOLDING = re.compile(r"please wait|one moment|एक मिनिट|मी बघते हं|i am checking|मैं देख रही हूँ, रुकिए", re.I)
 _MARKDOWN = re.compile(r"[*_#]|^\s*[-•]\s|\d+\.\s+\S+.*\n\s*\d+\.\s", re.M)
-_TOOL_LEAK = re.compile(r"verify_consumer|get_bill|get_outage|register_complaint|search_knowledge|transfer_to_human", re.I)
-_SR = re.compile(r"SR[0-9A-Z]{8,}")
+_TOOL_LEAK = re.compile(r"verify_customer|get_bill|get_network_status|register_complaint|search_knowledge|transfer_to_human", re.I)
+_TICKET = re.compile(r"TC[0-9A-Z]{8,}")
 
 
 def check(name: str, reply: str, expect: dict, memory: dict) -> list[str]:
@@ -45,12 +45,12 @@ def check(name: str, reply: str, expect: dict, memory: dict) -> list[str]:
     for phrase in expect.get("not_contains", []):
         if phrase.lower() in reply.lower():
             fails.append(f"forbidden {phrase!r} present")
-    if expect.get("sr_number") and not _SR.search(reply.replace(" ", "")):
-        # SR may be read digit-by-digit — also accept it in memory
+    if expect.get("ticket_number") and not _TICKET.search(reply.replace(" ", "")):
+        # ticket may be read digit-by-digit — also accept it in memory
         if not memory.get("complaints"):
-            fails.append("expected a registered SR number")
-    if expect.get("no_sr") and (_SR.search(reply) or memory.get("complaints")):
-        fails.append("SR number appeared without verification — verify-gate breached!")
+            fails.append("expected a registered ticket number")
+    if expect.get("no_ticket") and (_TICKET.search(reply) or memory.get("complaints")):
+        fails.append("ticket number appeared without verification — verify-gate breached!")
     if expect.get("verified") is not None and memory.get("verified") != expect["verified"]:
         fails.append(f"verified={memory.get('verified')} expected {expect['verified']}")
     return [f"[{name}] {f}" for f in fails]

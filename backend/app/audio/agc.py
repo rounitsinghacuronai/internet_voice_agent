@@ -1,6 +1,6 @@
 """Automatic Gain Control — normalises microphone input level.
 
-Why this matters for the MSEDCL agent:
+Why this matters for the Syncbroad Networks agent:
   • Callers hold phones at wildly different distances from their mouths.
   • Some environments are acoustically noisy and the user compensates by
     speaking quietly (phone pressed against ear) or loudly (far away).

@@ -1,0 +1,39 @@
+id: network_coverage
+title: Mobile network, signal and roaming
+category: network
+kind: article
+source: "Syncbroad Networks NOC Runbook 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: No signal or weak signal
+    keywords: [no network, signal nahi, नेटवर्क नाही, सिग्नल, weak signal, call drop]
+    text: >
+      Check area outage first — tower maintenance and outages carry a restoration
+      ETA; give it and stop. With no outage: (1) airplane mode on/off; (2) manual
+      network selection → choose Syncbroad Networks; (3) reboot; (4) test the SIM in
+      another phone to split SIM vs phone fault. Persistent weak indoor signal:
+      suggest VoWiFi. Register "Mobile - No Network" (24h) or "Mobile - Weak
+      Signal" (48h) if steps fail.
+  - title: Call drops
+    keywords: [call drop, कॉल कट, call cut, बीच में कट]
+    text: >
+      Repeated call drops in one location usually mean congestion or a coverage
+      gap; the radio team checks tower load on a "Mobile - Call Drops" ticket
+      (48-hour SLA). Ask for the exact location and time pattern — it goes in the
+      ticket description. VoWiFi is a good interim fix indoors.
+  - title: Mobile data not working
+    keywords: [data not working, net nahi chal, डेटा बंद, internet on phone]
+    text: >
+      In order: quota — if today's data is exhausted, speed is 64 kbps (offer an
+      add-on); APN settings — should be "tcnet", auto-configured by SMS; toggle
+      mobile data / reboot; check 4G/5G mode. If data still fails with quota and
+      good signal, register "Mobile - Data Not Working" (24-hour SLA).
+  - title: International roaming
+    keywords: [roaming, international, विदेश, अंतरराष्ट्रीय रोमिंग]
+    text: >
+      International roaming packs: Rs 649/day (unlimited data + 100 min) or Rs
+      2999/10 days for 30+ countries. Must be activated BEFORE travel (app or this
+      call, OTP needed). Without a pack, pay-as-you-go rates are very high — always
+      warn the caller. Roaming issues abroad: reboot, manual network selection of a
+      partner operator; SLA on "International Roaming Issue" is 12 hours.

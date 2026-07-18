@@ -1,0 +1,41 @@
+id: mobile_plans
+title: Prepaid and postpaid plans, packs and upgrades
+category: mobile
+kind: policy
+source: "Syncbroad Networks Plan Catalog 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: Prepaid plans
+    keywords: [prepaid, pack, plan, validity, रिचार्ज प्लॅन, प्रीपेड]
+    text: >
+      Prepaid packs - Rs 199: 1GB/day, 24 days. Rs 299: 2GB/day, 28 days, unlimited
+      calls, 100 SMS/day. Rs 449: 3GB/day, 28 days. Rs 599: 2GB/day, 56 days.
+      Data add-ons: Rs 19 (1GB, same-day), Rs 29 (2GB, same-day). All packs include
+      unlimited national calls and 5G access where the phone and area support it.
+  - title: Postpaid plans
+    keywords: [postpaid, bill plan, family, पोस्टपेड]
+    text: >
+      Postpaid - Rs 399: 40GB with rollover. Rs 599: 75GB + Netflix Basic. Rs 999:
+      150GB family plan with two free add-on SIMs. Unused data rolls over up to
+      200GB. Plan rent is billed monthly plus 18% GST.
+  - title: Plan upgrade and downgrade
+    keywords: [upgrade, downgrade, change plan, प्लॅन बदल, plan change]
+    text: >
+      Plan changes need identity verification plus OTP confirmation. Prepaid changes
+      apply from the next recharge. Postpaid and fiber changes apply from the next
+      bill cycle; the current cycle is pro-rated. Downgrades are free; no lock-in
+      except enterprise contracts.
+  - title: Data usage and balance enquiry
+    keywords: [data balance, usage, कितना डेटा, डेटा शिल्लक]
+    text: >
+      Live data usage and remaining quota can be read from the account in real time.
+      When the daily quota is exhausted, speed drops to 64 kbps until midnight;
+      a same-day add-on pack restores full speed immediately.
+  - title: 5G, VoLTE and VoWiFi
+    keywords: [5g, volte, vowifi, wifi calling, एचडी कॉल]
+    text: >
+      5G is included at no extra charge on all current packs in 5G-covered areas.
+      VoLTE (HD voice over 4G) is on by default. VoWiFi (Wi-Fi calling) works on
+      supported phones when enabled in phone settings — useful where indoor signal
+      is weak. No separate activation or charge for any of these.

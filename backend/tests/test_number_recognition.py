@@ -25,15 +25,15 @@ def test_spoken_to_digits_romanized_hindi():
 
 
 def test_normalize_digit_words_preserves_sentence_structure():
-    out = normalize_digit_words("my consumer number is one seven zero")
-    assert out == "my consumer number is 1 7 0"
+    out = normalize_digit_words("my account number is one seven zero")
+    assert out == "my account number is 1 7 0"
 
 
 def test_number_buffer_merges_fragments_across_pauses():
     """Exact scenario from the spec: number spoken in five separate,
     pause-separated fragments must merge into one complete 12-digit value."""
     buf = NumberBuffer()
-    buf.start("consumer_no")
+    buf.start("account_no")
     fragments = ["one zero zero", "two three", "four five six", "seven eight", "nine one"]
     digits = complete = None
     for frag in fragments:
@@ -76,21 +76,21 @@ def test_correction_updates_only_the_wrong_digit():
 def test_is_correction_detects_common_phrasing():
     assert is_correction("sorry, last digit is 2")
     assert is_correction("galat bola, aakhri ank do hai")
-    assert not is_correction("my consumer number is 170023456789")
+    assert not is_correction("my account number is 300023456789")
 
 
 def test_looks_like_number_fragment_accepts_short_digit_utterances():
     assert looks_like_number_fragment("one zero zero")
-    assert looks_like_number_fragment("170023456789")
+    assert looks_like_number_fragment("300023456789")
 
 
 def test_looks_like_number_fragment_rejects_normal_sentences():
-    assert not looks_like_number_fragment("my light has been gone since morning")
+    assert not looks_like_number_fragment("my internet has been down since morning")
     assert not looks_like_number_fragment("can you talk in english please")
 
 
 def test_is_valid_length_rejects_impossible_numbers():
-    assert is_valid_length("consumer_no", "170023456789")       # 12 digits, valid
-    assert not is_valid_length("consumer_no", "17002345")       # too short
+    assert is_valid_length("account_no", "300023456789")       # 12 digits, valid
+    assert not is_valid_length("account_no", "30002345")       # too short
     assert not is_valid_length("mobile", "12345")                # too short
-    assert is_valid_length("consumer_no", "170023456789")
+    assert is_valid_length("account_no", "300023456789")

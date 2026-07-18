@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Empty = auto-select by AGENT_GENDER (male→advait, female→ritu, see persona.py).
     # Set explicitly to pin any Bulbul v3 speaker.
     tts_speaker: str = ""
-    tts_pace: float = 1.0             # calm, unhurried customer-care delivery
+    tts_pace: float = 1.10            # global speaking rate ~1.10x; per-style pace multiplies this (clamped by speech_pace_max). Digit groups stay clear via each style's number_pace.
     tts_sample_rate: int = 24000
     # ── streaming providers (sub-1.1s latency; needs `pip install sarvamai`) ──
     # STT over WebSocket: transcribes WHILE the caller speaks — final transcript
@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # TTS over WebSocket: first audio chunk in ~200ms instead of waiting for
     # full-sentence synthesis. Cache misses only; falls back to REST on error.
     tts_streaming_enabled: bool = False
+    # EARLY FLUSH (streaming STT only): once the caller has been silent this many
+    # ms (but before the full vad_end_silence hangover), send Sarvam the flush
+    # signal so the final transcript is already waiting when the endpointer
+    # fires UTTERANCE. If speech resumes, the extra segment simply appends —
+    # nothing is lost. Cuts the post-endpoint STT wait to near zero.
+    stt_early_flush_silence_ms: int = 200
 
     # ── Gemini ──
     gemini_api_key: str = ""
@@ -177,10 +183,16 @@ class Settings(BaseSettings):
     max_tool_rounds: int = 4
     verify_ttl_s: int = 1800           # hard verify-gate window
     llm_timeout_s: float = 30.0
-    # History cap (messages, not turns — sentences commit individually). 24
-    # messages ≈ 6–9 conversational turns of context: ample for a utility call,
-    # and every message beyond that adds input tokens → LLM TTFT. Was 40.
-    history_max_turns: int = 24
+    # History cap (messages, not turns — sentences commit individually). 20
+    # messages ≈ 5–8 conversational turns of context: ample for a support call,
+    # and every message beyond that adds input tokens → LLM TTFT. Was 40→24→20.
+    history_max_turns: int = 20
+    # FIRST-AUDIO FLUSH: while nothing has been spoken yet this turn, a long
+    # run-on first sentence is split at a comma once the buffer reaches this
+    # many chars (instead of the normal 160) so TTS starts sooner. Only the
+    # first segment of a turn pays the prosody cost — later segments keep the
+    # whole-sentence rule that protects intonation.
+    llm_first_flush_chars: int = 80
 
     # ── silence / no-response handling ──
     # When the agent has finished speaking and is waiting for the caller, but the
@@ -193,15 +205,33 @@ class Settings(BaseSettings):
 
     # ── RAG ──
     qdrant_url: str = ""               # empty → in-memory store
-    qdrant_collection: str = "msedcl_kb"
+    qdrant_collection: str = "telecom_kb"
     kb_dir: Path = ROOT / "knowledge" / "articles"
     index_dir: Path = ROOT / "knowledge" / "index"
     retrieval_top_k: int = 4
     rrf_k: int = 60
     low_confidence: float = 0.25
 
+    # ── WhatsApp ops notifications (see backend/app/notification_service/) ──
+    # POC: personal account via the whatsapp_bridge sidecar. Swap provider to
+    # meta/twilio/exotel later — only whatsapp_sender.py changes.
+    whatsapp_enabled: bool = False
+    whatsapp_provider: str = "personal"       # personal | meta | twilio | exotel
+    whatsapp_group_name: str = "Operations"
+    whatsapp_bridge_url: str = "http://127.0.0.1:3001"
+    whatsapp_retry_max: int = 3
+    whatsapp_retry_base_s: float = 2.0
+    whatsapp_dedup_window_min: int = 60       # same customer+category window
+    whatsapp_llm_summary: bool = False        # background Gemini polish of summary
+    # Meta Cloud API (WHATSAPP_PROVIDER=meta)
+    whatsapp_meta_token: str = ""
+    whatsapp_meta_phone_id: str = ""
+    whatsapp_meta_to: str = ""                # comma-separated E.164 numbers
+    # optional S3 mirror of the notification audit trail
+    notify_s3_bucket: str = ""
+
     # ── data ──
-    db_path: Path = ROOT / "backend" / "msedcl.db"
+    db_path: Path = ROOT / "backend" / "telecom.db"
 
 
 @lru_cache

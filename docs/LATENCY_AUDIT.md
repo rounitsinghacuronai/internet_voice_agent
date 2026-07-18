@@ -1,4 +1,4 @@
-# Latency Audit — MSEDCL AI Voice Agent
+# Latency Audit — Syncbroad Networks AI Voice Agent
 
 Audited: full pipeline, Exotel → WS → VAD/DSP → STT → conversation layer → Gemini
 → speech engine → Sarvam TTS → Exotel. Date: 13 Jul 2026.
@@ -8,17 +8,17 @@ Audited: full pipeline, Exotel → WS → VAD/DSP → STT → conversation layer
 | Stage | Target | Current | Verdict |
 |---|---|---|---|
 | Exotel → WS delivery | <50 ms | ~20–40 ms (Mumbai→Mumbai) | Excellent |
-| End-of-speech detection | — | **450 ms fixed** (900 ms during number dictation) | Acceptable — physics of turn-taking; already adaptive |
+| End-of-speech detection | — | **400 ms fixed** (900 ms during number dictation) | Acceptable — physics of turn-taking; already adaptive |
 | Audio DSP (AGC→AEC→gate→verify) | <20 ms | ~10–50 ms, off-loop (thread pool) | Excellent |
-| STT (Sarvam Saarika, REST) | <700 ms | ~350–700 ms measured | Acceptable — **biggest roadmap item (streaming STT)** |
+| STT | <100 ms | streaming + **early flush inside the hangover** → finalize ≈ 10–60 ms after UTTERANCE; REST fallback 350–700 ms | Excellent |
 | Transcript pre-processing + intent/topic/confidence | <20 ms | <2 ms (pure regex, precompiled) | Excellent |
 | RAG retrieval | <50 ms | in-memory, off-loop; only on knowledge questions | Excellent |
 | Tool dispatch overhead | <30 ms | ~1 ms + backend time (threaded, shielded) | Excellent |
-| LLM first sentence (Gemini 2.5 Flash, reasoning off) | 300–500 ms TTFT | ~400–700 ms to first *complete sentence* | Acceptable |
+| LLM first sentence (Gemini 2.5 Flash, reasoning off) | 300–500 ms TTFT | ~350–600 ms to first *voiced segment* (80-char first-flush) | Acceptable |
 | Speech engine (clean → prosody → format → gender check) | <20 ms | <3 ms (deterministic, zero network) | Excellent |
-| TTS first audio (Bulbul v3, REST) | 200–400 ms | ~300–500 ms; **0 ms on cache hits**; sentence N+1 prefetched in parallel | Acceptable |
+| TTS first audio (Bulbul v3, WS streaming) | ~200 ms | ~200 ms first chunk; **0 ms on cache hits**; sentence N+1 prefetch now actually wired into the speaker queue | Good |
 | Return to Exotel | <100 ms | immediate (first 1.0 s unpaced, then real-time paced) | Excellent |
-| **Total (typical turn)** | **1.2–2.0 s** | **~1.3–1.9 s** + 450 ms endpointing | **On target** |
+| **Total (typical turn)** | **0.9–1.2 s speech-to-speech** | **~0.5–0.8 s** + 400 ms endpointing | **On target** |
 
 Greeting is special-cased: pre-warmed into the TTS cache at boot → first audio ~100 ms after `start`.
 
@@ -60,37 +60,66 @@ token streaming of the mock, 204 ms, subtracted.)
 
 ## 4 · Live instrumentation
 
-Every turn logs `latency pipe/stt/llm/tts | utterance→first-audio` and every
-call ends with `LATENCY SUMMARY over N turns | ... | target total<2000ms`.
-Collect a week of these lines to replace estimates with measured p50/p95 before
-further tuning.
+Every turn logs `latency pipe/stt/llm/tts | utterance→first-audio` (stt = wait
+after the pipeline — stages stay additive despite the overlap) and every call
+ends with `LATENCY SUMMARY over N turns | ... | target total<800ms excl.
+endpoint (≈1200 ms speech-to-speech)`. Collect a week of these lines to replace
+estimates with measured p50/p95 before further tuning.
 
-## 5 · Prioritized roadmap
+## 5 · Optimizations shipped in the 900–1200 ms pass (this cycle)
 
-1. ✅ **Streaming STT** — IMPLEMENTED (`STT_STREAMING_ENABLED`, sarvam_stt_stream.py):
-   audio streams to Sarvam while the caller speaks; `finalize()` returns the
-   transcript ~100–250 ms after end-of-speech (vs 350–700 ms REST). Automatic
-   REST fallback on any error. Saves ~250–500 ms/turn. Note: streams silence →
-   STT billing ~₹0.5/min (vs ₹0.21 gated REST).
-2. ✅ **Streaming TTS** — IMPLEMENTED (`TTS_STREAMING_ENABLED`, sarvam_tts.py):
-   first PCM chunk from the Bulbul WebSocket in ~200 ms, cache misses only,
-   REST fallback, results fed into the LRU cache. Saves ~150–300 ms.
-3. ✅ **Endpointing 400 ms** (.env) — was 450.
-4. **Gemini 2.5 Flash-Lite A/B**: typically ~150–250 ms lower TTFT and 70%
-   cheaper — needs a quality gate on Marathi tool-calling.
-5. **HTTP/2 on the shared client** (`httpx[http2]`): multiplexes concurrent
-   TTS prefetches over one connection; modest (~20–50 ms) under load.
+1. ✅ **Streaming STT** (`STT_STREAMING_ENABLED`) — audio streams to Sarvam while
+   the caller speaks; REST fallback automatic. Note: streams silence → STT
+   billing ~₹0.5/min (vs ₹0.21 gated REST).
+2. ✅ **Streaming TTS** (`TTS_STREAMING_ENABLED`) — first PCM chunk ~200 ms,
+   cache misses only, REST fallback, results feed the LRU cache.
+3. ✅ **Endpointing 400 ms** (.env).
+4. ✅ **STT EARLY FLUSH** (`STT_EARLY_FLUSH_SILENCE_MS=200`, new) — the flush
+   signal goes out once the caller has been silent ~200 ms, i.e. INSIDE the
+   400 ms endpoint hangover. Sarvam finalizes while we wait out the hangover;
+   `finalize()` after UTTERANCE typically returns in single-digit ms. The
+   duplicate flush is suppressed and the settle window drops 80→30 ms.
+   Saves ~100–250 ms/turn.
+5. ✅ **Pipeline ∥ STT finalize** — the streaming finalize needs no cleaned
+   audio, so it now starts BEFORE the CPU-bound AGC/AEC/gate pass instead of
+   behind it; a suppressed (noise) utterance still consumes the transcript so
+   it can never leak into the next turn. Saves pipe_ms (~10–50 ms).
+6. ✅ **First-audio flush** (`LLM_FIRST_FLUSH_CHARS=80`, new) — while nothing
+   has been voiced yet this turn, a long opening sentence splits at a comma at
+   80 chars instead of 160, so TTS starts ~100–200 ms sooner; only that first
+   segment pays the split-prosody cost, later segments keep whole-sentence
+   delivery.
+7. ✅ **Sentence N+1 prefetch actually wired** — `SarvamTTS.prefetch()` existed
+   but had no call site; the speaker queue now prefetches every queued sentence
+   while sentence N plays (in-flight de-dup makes the later synthesize() join
+   the same network call). Eliminates inter-sentence gaps.
+8. ✅ **History trim 24→20 messages** — fewer input tokens every turn → TTFT.
+9. ✅ **HTTP/2 on the shared client** when `h2` is installed (`httpx[http2]` in
+   requirements) — multiplexes concurrent TTS prefetches + Gemini streams;
+   graceful HTTP/1.1 fallback.
 
-**Projected budget with both streams live:** 400 (endpoint) + ~180 (STT final)
-+ ~450 (LLM first sentence) + ~220 (TTS first chunk) ≈ **1.25 s including
-endpointing, ~0.85 s excluding it** — inside the 0.8–1.1 s perceived-response
-target, since callers experience the endpointing wait as their own pause.
+**Measured-stage budget after this pass:**
+400 (endpoint, parallel: early flush at 200 ms) + ~10 (pipe, overlapped)
++ ~10–60 (STT finalize wait) + ~350–600 (LLM first voiced segment)
++ ~200 (TTS first chunk) ≈ **0.97–1.27 s speech-to-speech**, ~0.6–0.9 s
+excluding the endpoint hangover callers perceive as their own pause.
+
+### Remaining levers (not yet shipped)
+- **Gemini 2.5 Flash-Lite A/B** (`GEMINI_MODEL=gemini-2.5-flash-lite`):
+  ~150–250 ms lower TTFT, 70% cheaper — needs a quality gate on Marathi
+  tool-calling before default-on.
+- **Speculative LLM start** at ~250 ms of silence (cancel if speech resumes):
+  another ~150 ms, at the cost of wasted generations and real complexity.
+- **Endpoint 400→350 ms** after a week of production `LATENCY SUMMARY` lines
+  confirms no mid-sentence chops in Marathi/Hindi cadence.
 
 ## 6 · Readiness assessment
 
-**Ready for production POC.** Turn latency sits inside the 1.2–2.0 s human
-window; concurrency headroom (50 calls, flat latency) far exceeds pilot volume;
-every stage is instrumented; failure paths (provider errors, barge-in,
-cancellation) are cleanly handled. The two REST provider hops (STT, TTS) are
-the only stages between the current build and a sub-1.2 s "instant" feel — both
-have streaming upgrades on the roadmap and require no architectural change.
+**Ready for production POC at the 0.9–1.2 s target.** With streaming STT +
+early flush, streaming TTS, first-audio flush and the wired prefetch, the
+typical turn lands ~0.97–1.27 s speech-to-speech (≈0.6–0.9 s after the caller's
+own pause). Concurrency headroom (50 calls, flat latency) far exceeds pilot
+volume; every stage is instrumented; failure paths (provider errors, barge-in,
+cancellation, stream fallbacks) are cleanly handled. Verify with a week of
+`LATENCY SUMMARY` lines, then take the Flash-Lite A/B and the 350 ms endpoint
+if p95 needs more headroom.

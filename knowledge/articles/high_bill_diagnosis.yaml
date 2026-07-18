@@ -1,28 +1,25 @@
 id: high_bill_diagnosis
-title: High bill - diagnosis before complaint
+title: High or incorrect bill - diagnosis before complaint
 category: billing
 kind: decision_tree
-source: "Training Manual pp.26,34,64; SOP practice"
+source: "Syncbroad Networks CC Playbook 2026-07"
 version: "2026-07"
 language: en
 sections:
-  - title: High bill diagnosis steps
-    keywords: [high bill, zyada bill, जास्त बिल, ज्यादा बिल, bill complaint]
+  - title: High bill diagnosis order
+    keywords: [high bill, zyada bill, बिल जास्त, ज्यादा बिल, incorrect bill]
     text: >
-      When a caller reports a high bill, diagnose before registering. First check if the
-      previous bill was average or estimated - if yes, the current bill includes a true-up
-      of actual consumption and will normalise from the next actual reading. Second, check
-      the meter status - a stuck or faulty meter warrants a Meter Stuck up / Stop complaint.
-      Third, genuinely higher usage (summer load, new appliances) or slab change or FAC
-      explains many cases. Register a High Bill complaint only if the caller still disputes
-      after explanation. High Bill complaints follow a 720-hour (30-day) standard
-      resolution at the Sub-Division Office. Never promise a reduction - only the
-      Sub-Division Office can adjust a bill after verification.
-  - title: Average billing explanation
-    keywords: [average bill, estimated, सरासरी, औसत]
+      Before registering a billing complaint, check in order: (1) plan rent change
+      or promotional discount that ended this cycle; (2) one-time charges — add-on
+      data packs, international roaming, premium SMS; (3) pro-rated charges after a
+      mid-cycle plan change; (4) GST on all of the above. Explain the largest line
+      item first. Only register "Billing - High Bill" if a charge looks genuinely
+      wrong; the billing review team responds within 72 hours and any agreed
+      adjustment appears in the next invoice.
+  - title: Charges the agent must never promise to waive
+    keywords: [waiver, discount, adjustment, माफ]
     text: >
-      An average bill is issued when the meter reading could not be taken (inaccessible
-      meter, reader missed the visit). It is based on past consumption. When the next
-      actual reading happens, the difference is trued up automatically. Consumers can
-      submit their own meter reading through the Mahavitaran mobile app to avoid average
-      billing.
+      Frontline agents never promise waivers, refunds or goodwill credits. Only the
+      billing review team can adjust an invoice after reviewing the ticket. Wording:
+      "I've registered this for review — if the charge is found incorrect, it will be
+      adjusted in your next bill."

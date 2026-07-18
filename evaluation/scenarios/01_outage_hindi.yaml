@@ -1,8 +1,0 @@
-name: Power outage — Hindi caller, verify then resolve
-turns:
-  - user: "हेलो, हमारे यहाँ बिजली नहीं आ रही है कल रात से"
-    expect: {language: hi, not_contains: ["नमस्कार महावितरण, मी"]}
-  - user: "मेरा consumer number 170012345678 है"
-    expect: {language: hi, verified: true}
-  - user: "हाँ ठीक है, कब तक आएगी?"
-    expect: {language: hi}

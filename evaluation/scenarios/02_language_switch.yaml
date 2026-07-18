@@ -1,8 +1,8 @@
 name: Language switch is a command
 turns:
-  - user: "लाईट गेली आहे माझ्या घरची"
+  - user: "नेट चालत नाही आहे माझ्या घरचं"
     expect: {language: mr}
   - user: "Can you please talk in English?"
     expect: {language: en, not_contains: ["नमस्कार", "बोलू शकतो"]}
-  - user: "My consumer number is 170023456789"
+  - user: "My account number is 300023456789"
     expect: {language: en, verified: true}

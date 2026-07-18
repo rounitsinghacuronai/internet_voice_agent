@@ -1,0 +1,45 @@
+id: sim_services
+title: SIM, eSIM, MNP and KYC services
+category: sim
+kind: policy
+source: "Syncbroad Networks SIM Ops Manual 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: Lost or stolen SIM - block immediately
+    keywords: [lost sim, stolen, सिम हरवले, sim chori, block sim, फोन चोरी]
+    text: >
+      A lost/stolen SIM is blocked immediately on the call after identity
+      verification — OTP is never required because the caller cannot receive it.
+      Calls, SMS and data stop at once. A replacement SIM with the SAME number is
+      free at any Syncbroad Networks store with photo ID, or by doorstep KYC delivery.
+      The number stays reserved for the customer for 90 days.
+  - title: SIM replacement and activation
+    keywords: [sim replacement, new sim, activation, सिम बदल, activate]
+    text: >
+      Replacement SIMs activate within 4 hours of KYC completion; the old SIM stops
+      working the moment the new one registers. A brand-new SIM (new number)
+      activates within 4 hours of Aadhaar-based eKYC. If a SIM is not active after
+      4 hours, register "SIM - Not Activating".
+  - title: eSIM activation and transfer
+    keywords: [esim, qr code, ई-सिम, esim transfer]
+    text: >
+      eSIM conversion needs verification plus OTP, and a registered email — the QR
+      code is emailed within 15 minutes. Scan it under phone settings; the physical
+      SIM deactivates once the eSIM registers. Moving eSIM to a new phone repeats
+      the same flow. Supported on iPhone XS+ and most flagship Androids.
+  - title: MNP - porting in and out
+    keywords: [mnp, port, porting, दूसरी कंपनी, पोर्ट]
+    text: >
+      Port IN to Syncbroad Networks: SMS "PORT <number>" to 1900 from the current SIM, get
+      the UPC code (valid 4 days), complete KYC at a store or doorstep; port
+      completes in 3 to 5 working days with under 2 hours of downtime at night.
+      Port OUT: same UPC process with the receiving operator; dues must be clear on
+      postpaid. Agents never block or delay a port-out request.
+  - title: KYC and re-verification
+    keywords: [kyc, verification, आधार, documents]
+    text: >
+      KYC uses Aadhaar-based eKYC or photo ID plus address proof. Syncbroad Networks NEVER
+      calls asking to "complete KYC" by app download or OTP — such calls are fraud;
+      log a priority incident. Genuine re-verification happens only in-store or by
+      scheduled doorstep visit.

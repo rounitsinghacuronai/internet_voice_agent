@@ -1,34 +1,25 @@
 id: digital_services
-title: Mobile app, website and self-service
+title: App, website and self-care services
 category: general
 kind: article
-source: "Training Manual pp.40-58"
+source: "Syncbroad Networks Digital Guide 2026-07"
 version: "2026-07"
 language: en
 sections:
-  - title: Mahavitaran mobile app features
-    keywords: [app, mobile app, अॅप, ऐप]
+  - title: Syncbroad Networks app
+    keywords: [app, self care, अॅप, ऐप, download]
     text: >
-      The Mahavitaran consumer app (Android and iOS) lets consumers view and pay bills,
-      register and track complaints, see bill and payment history, manage multiple
-      connections, submit their own meter reading to avoid average billing, apply for new
-      connections and name changes, request load changes, update mobile number, email and
-      Aadhaar, locate offices and collection centres, and estimate monthly consumption.
-  - title: Website and Web Self Service
-    keywords: [website, WSS, mahadiscom, online]
+      The Syncbroad Networks app (Android/iOS) shows live usage, bills, recharge, plan
+      change, ticket tracking, Wi-Fi settings for fiber (SSID/password/guest
+      network), and store locations. Login via OTP on the registered mobile.
+  - title: Missed-call and SMS services
+    keywords: [ussd, missed call, sms code, बॅलन्स चेक]
     text: >
-      On mahadiscom.in consumers can pay bills, use Web Self Service, recharge prepaid
-      meters, opt for Go-Green e-bills by email, register mobile and email, apply for
-      solar rooftop under net metering, use the HT grievance system, and see feeder
-      outage and load-shedding information under the consumer section.
-  - title: Go Green e-bill
-    keywords: [go green, e-bill, email bill]
+      Balance and validity: dial *121#. Own number: *99#. Data balance: SMS DATA to
+      121. Bill amount: SMS BILL to 121. DND: SMS START 0 to 1909. These are free.
+  - title: Store locator and doorstep service
+    keywords: [store, दुकान, doorstep, kyc visit]
     text: >
-      Under the Go-Green facility consumers receive bills by email instead of paper.
-      Registration is on the website with consumer number and email.
-  - title: Solar rooftop and solar pumps
-    keywords: [solar, सोलर, rooftop, net metering, krushi pump]
-    text: >
-      Consumers can apply online for rooftop solar PV under net metering through the
-      Mahavitaran website. Farmers can get daytime supply and freedom from bills through
-      the Magel Tyala Saur Krushi Pump scheme for solar agricultural pumps.
+      Stores operate 10 AM to 8 PM daily. SIM replacement, KYC, MNP and eSIM QR
+      needs can also be done by doorstep visit (Rs 99, free on plans 999+) booked
+      on this call or in the app.

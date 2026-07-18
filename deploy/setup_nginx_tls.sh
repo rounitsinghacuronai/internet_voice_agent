@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# One-shot server setup for the Mahavitaran Voice agent.
+# One-shot server setup for the TelecomCare Voice agent.
 # Configures nginx as a reverse proxy (with WebSocket support) in front of the
 # FastAPI app on 127.0.0.1:8000, then installs a Let's Encrypt TLS certificate.
 #

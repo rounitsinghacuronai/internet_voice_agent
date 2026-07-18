@@ -4,7 +4,7 @@ An intelligent layer between the LLM and Sarvam TTS that turns *an AI reading te
 into *a human naturally speaking*. It does **not** optimise Gemini or Sarvam. It
 transforms raw LLM output into natural spoken dialogue before it reaches the TTS
 engine, so the listener stops hearing "synthesized speech" and starts hearing a
-calm, experienced Mahavitaran customer-care executive on the phone.
+calm, experienced Syncbroad Networks customer-care executive on the phone.
 
 Everything here is deterministic and offline — no extra network call on the live
 path, so it adds no latency to the ~1.4–2.1 s speech-to-speech budget. An
@@ -45,7 +45,7 @@ delivery, and it cannot touch two things the model does not control:
   pace (slower for numbers, steadier for angry callers) that the LLM has no way
   to influence.
 - **Deterministic prosody + number grouping.** The engine enforces digit-group
-  pauses so a 12-digit consumer number is never rushed, and shapes pauses by
+  pauses so a 12-digit account number is never rushed, and shapes pauses by
   meaning — regardless of model drift.
 
 Where the LLM already did the right thing (opened with an acknowledgement, spelled
@@ -62,7 +62,7 @@ far to slow for numbers.
 |---|---|---|---|
 | Greeting | warm | 1.00× | warm, welcoming, medium pace (wording preserved) |
 | Verification | helpful | 0.95× | clear, deliberate, **slower for numbers** (0.80×) |
-| Power outage | concerned | 0.97× | calm, reassuring |
+| Service down (net/network) | concerned | 0.97× | calm, reassuring |
 | Billing | helpful | 0.97× | patient, explanatory |
 | Complaint registered | confident | 0.98× | confident, reassuring |
 | Emergency | calm-urgent | 0.98× | calm, direct, tight pauses (wording preserved) |
@@ -115,8 +115,8 @@ tuned to exactly how Sarvam interprets it:
 **Number pronunciation.** Long identifier numbers are grouped and voiced
 digit-by-digit with a comma pause between groups, so Sarvam never rushes them:
 
-- consumer (12) → `4, 4, 4` → "1 7 0 0, 1 2 3 4, 5 6 7 8"
-- mobile (10) → `5, 5` · meter (9) → `3, 3, 3` · OTP (6) → `3, 3`
+- account (12) → `4, 4, 4` → "3 0 0 0, 1 2 3 4, 5 6 7 8"
+- mobile (10) → `5, 5` · 9-digit reference → `3, 3, 3` · OTP (6) → `3, 3`
 
 Rupee **amounts** are left alone (spoken as words), and **alphanumeric complaint
 IDs** are left to the LLM's phonetic rendering — mechanically spacing ASCII codes
@@ -162,7 +162,7 @@ comparison. Run the demo from the repo root:
 python -m evaluation.speech_naturalness
 ```
 
-Representative before/after over six MSEDCL replies (deterministic path, base
+Representative before/after over six Syncbroad Networks replies (deterministic path, base
 pace 1.0):
 
 | metric | before | after | delta |
@@ -175,10 +175,10 @@ pace 1.0):
 Example transform:
 
 ```
-BEFORE: I understand. I will now verify your consumer account. Please note that
-        your consumer number is 170012345678.
-AFTER : I see. Let me verify your consumer account. Just so you know, your
-        consumer number is 1 7 0 0, 1 2 3 4, 5 6 7 8.        [pace 0.80]
+BEFORE: I understand. I will now verify your customer account. Please note that
+        your account number is 300012345678.
+AFTER : I see. Let me verify your customer account. Just so you know, your
+        account number is 3 0 0 0, 1 2 3 4, 5 6 7 8.        [pace 0.80]
 ```
 
 ## Tests

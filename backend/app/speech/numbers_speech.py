@@ -1,8 +1,8 @@
 """Number Pronunciation Planning (the OUTPUT side).
 
 The Number Recognition Engine (conversation/numbers.py) handles numbers coming
-IN from the caller. This handles numbers going OUT to the caller: consumer
-numbers, mobile numbers, OTPs, meter numbers and complaint IDs must be spoken
+IN from the caller. This handles numbers going OUT to the caller: account
+numbers, mobile numbers, OTPs and ticket IDs must be spoken
 in clear, digit-by-digit groups with a small pause between groups — never let
 Sarvam rush "170012345678" into one giant cardinal.
 
@@ -31,11 +31,11 @@ def _group_digits(digits: str) -> str:
     """Group a pure-digit string into natural spoken clusters, each digit voiced
     individually and a comma (Sarvam micro-pause) between clusters."""
     n = len(digits)
-    if n == 12:                      # consumer number → 4-4-4
+    if n == 12:                      # account number → 4-4-4
         groups = [digits[0:4], digits[4:8], digits[8:12]]
     elif n == 10:                    # mobile → 5-5
         groups = [digits[0:5], digits[5:10]]
-    elif n == 9:                     # meter → 3-3-3
+    elif n == 9:                     # 9-digit reference → 3-3-3
         groups = [digits[0:3], digits[3:6], digits[6:9]]
     elif n == 6:                     # OTP → 3-3
         groups = [digits[0:3], digits[3:6]]
@@ -66,7 +66,7 @@ def format_numbers_for_speech(text: str, lang: str = "mr") -> tuple[str, bool]:
     """
     changed = False
 
-    # long pure-digit runs (consumer/mobile/OTP/meter)
+    # long pure-digit runs (account/mobile/OTP)
     def _digit_sub(m: re.Match) -> str:
         nonlocal changed
         raw = m.group(1)

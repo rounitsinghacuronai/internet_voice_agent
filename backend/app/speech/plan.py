@@ -60,7 +60,7 @@ class PauseType(Enum):
 class Emotion(Enum):
     """Delivery colour the Voice Director assigns. Stays subtle — never theatrical."""
     NEUTRAL = "neutral"
-    CONCERNED = "concerned"        # power outage — something's wrong
+    CONCERNED = "concerned"        # service down / outage — something's wrong
     HELPFUL = "helpful"            # billing / how-to
     CONFIDENT = "confident"        # complaint registered, action done
     CALM_URGENT = "calm_urgent"    # emergency — steady but quick
@@ -73,7 +73,7 @@ class Emotion(Enum):
 class StyleName(Enum):
     GREETING = "greeting"
     VERIFICATION = "verification"
-    OUTAGE = "outage"
+    SERVICE_DOWN = "service_down"
     BILLING = "billing"
     COMPLAINT_REGISTERED = "complaint_registered"
     EMERGENCY = "emergency"
@@ -116,9 +116,9 @@ class SpeechContext:
     is_closing: bool = False
     is_apology: bool = False          # provider-error apology line
     verified: bool = False
-    asking_for_number: str | None = None   # consumer_no|mobile|otp|meter_no
+    asking_for_number: str | None = None   # account_no|mobile|otp
     just_registered_complaint: bool = False
-    topic: str | None = None          # outage|billing|complaint_status|new_connection
+    topic: str | None = None          # network|internet|billing|sim|complaint_status|new_connection
     confidence_tier: str = "high"     # high|medium|low
     caller_emotion: str | None = None  # angry|frustrated|elderly|worried|calm
     processing: bool = False          # a real lookup/tool ran → hesitation allowed

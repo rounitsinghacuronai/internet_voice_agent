@@ -1,0 +1,29 @@
+id: enterprise_services
+title: Enterprise - leased lines, MPLS, VPN and SLAs
+category: enterprise
+kind: article
+source: "Syncbroad Networks Enterprise Handbook 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: Dedicated internet and leased lines
+    keywords: [leased line, dedicated internet, ill, 1:1, enterprise]
+    text: >
+      Enterprise leased lines are symmetric 1:1 (no contention) from 50 Mbps to 10
+      Gbps with 99.5% uptime SLA, proactive NOC monitoring and a 4-hour MTTR
+      commitment. "Enterprise - Leased Line Down" is the highest-priority ticket:
+      2-hour L1 SLA, round-the-clock.
+  - title: MPLS, VPN and static IP
+    keywords: [mpls, vpn, static ip, site to site]
+    text: >
+      MPLS connects multi-site offices on a private backbone; managed site-to-site
+      VPN is the lighter alternative. Static IP blocks from /30 to /24 are
+      available on enterprise and fiber-business plans (Rs 199/month for a single
+      static IP on business fiber). Reverse DNS on request.
+  - title: Enterprise support process
+    keywords: [enterprise support, account manager, sla breach, escalation]
+    text: >
+      Enterprise accounts have a named account manager and a 24x7 NOC line. If an
+      SLA is breached, the ticket auto-escalates and service credits apply per
+      contract — register "Enterprise - SLA Breach" so the credit is computed.
+      Frontline agents never quote enterprise pricing; the account manager does.

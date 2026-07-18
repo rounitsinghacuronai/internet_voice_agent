@@ -89,10 +89,10 @@ class ResponseOptimizer:
             return text, False
         lang_name = {"mr": "Marathi", "hi": "Hindi", "en": "English"}[norm_lang(lang)]
         sys = (
-            "You rewrite one line of an Indian electricity customer-care agent's "
+            "You rewrite one line of an Indian telecom customer-care agent's "
             "reply so it sounds like a calm, experienced human speaking on the phone, "
             "not text being read. STRICT RULES: keep the meaning and EVERY number, "
-            "amount, name, date and complaint/consumer ID EXACTLY as given — never add, "
+            "amount, name, date and ticket/account ID EXACTLY as given — never add, "
             "drop or change a digit. Keep the same language "
             f"({lang_name}); do not translate. Use short, natural spoken clauses. "
             "Remove any documentation tone. Return ONLY the rewritten line, nothing else. "

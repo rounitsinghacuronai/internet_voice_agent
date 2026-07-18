@@ -1,11 +1,12 @@
-# Mahavitaran Voice — AI Customer Care for MSEDCL
+# Syncbroad Networks Voice — AI Customer Care for Telecom & Internet
 
-Production-grade AI voice platform replacing first-level MSEDCL customer care.
-Marathi / Hindi / English + natural code-mix, live account tools, grounded knowledge,
-safety fast-path, barge-in. Single FastAPI backend + single-file web client.
+Production-grade AI voice platform replacing first-level telecom customer care.
+Marathi / Hindi / English + natural code-mix, live account tools (plan, bill, recharge,
+usage, network, broadband diagnostics), grounded knowledge, fraud fast-path, barge-in.
+Single FastAPI backend + single-file web client.
 
 See **ARCHITECTURE.md** for design decisions, **docs/** for demo scenarios and the
-production checklist.
+production checklist, and **MIGRATION_REPORT.md** for the electricity→telecom migration.
 
 ## Quick start
 
@@ -25,15 +26,17 @@ point `GEMINI_API_KEY` at any OpenAI-compatible endpoint, and all unit tests pas
 
 | Say | What happens |
 |---|---|
-| "लाईट गेली आहे" | Marathi outage flow → asks consumer number → verifies → outage/complaint |
-| "bill bahut zyada aaya hai" | Hindi high-bill diagnosis (average? meter? usage?) before any complaint |
+| "नेट चालत नाही" | Marathi broadband flow → asks account number → verifies → outage/ONT check → diagnostics |
+| "bill bahut zyada aaya hai" | Hindi high-bill diagnosis (add-ons? pro-rata? roaming?) before any complaint |
 | "Can you talk in English?" | Instant, complete switch — stays English |
-| "रोड पर तार गिर गया, चिंगारी निकल रही है!" | Safety line first, emergency logged, human transfer — no verification |
-| "Online payment pe kitna discount milta hai?" | Grounded answer from KB (0.25%, cap ₹500, manual p.67) |
+| "किसी ने OTP माँग के पैसे निकाल लिए!" | Protect-the-customer line first, priority incident logged, human transfer — no OTP flow |
+| "Recharge fail hua, paise kat gaye?" | Grounded answer from KB (auto-reversal in 5–7 working days) |
 
-Demo consumer numbers (seeded): `170012345678` (Ramesh Patil, Kothrud — has area outage),
-`170023456789` (Sunita Deshmukh — previous bill was average), `210034567890`
-(Abdul Sheikh — stuck meter, area outage). OTPs print in the server log.
+Demo accounts (seeded): `300012345678` (Ramesh Patil, Kothrud — fiber 100 Mbps, mobile
+tower outage in area), `300023456789` (Sunita Deshmukh — postpaid, bill due),
+`210034567890` (Abdul Sheikh, Bhiwandi — fiber with red LOS, area fiber cut),
+`330045678901` (Kavita Jadhav — prepaid), `410056789012` (Suresh Wagh — enterprise
+leased line). OTPs print in the server log.
 
 ## Tests & evals
 
@@ -44,8 +47,9 @@ python evaluation/run_eval.py               # behavioural scenarios against a ru
 
 ## Knowledge base
 
-`knowledge/articles/*.yaml` — structured articles authored from the CCCC Training Manual
-and safety documents (source page cited per article). To ingest new documents:
+`knowledge/articles/*.yaml` — structured telecom articles (plans, recharge/billing rules,
+broadband troubleshooting ladder, SIM/eSIM/MNP, network, account, enterprise, fraud SOP).
+To ingest new documents:
 
 ```bash
 python knowledge/ingestion/extract_pdfs.py <pdf_dir>
@@ -53,10 +57,17 @@ python knowledge/ingestion/structure_with_llm.py extracted/<doc>.txt   # → _pr
 curl -X POST localhost:8000/kb/reload
 ```
 
+## WhatsApp ops notifications (POC)
+
+Actionable events (complaint registered, engineer visit, SIM block, fraud,
+escalation) auto-post a structured ticket to an internal WhatsApp group —
+async, deduplicated, retried, audited, zero added call latency. Ops dashboard
+at `/ops`. Setup + trade-offs: `docs/WHATSAPP_NOTIFICATIONS.md`.
+
 ## Production
 
 - `QDRANT_URL=http://localhost:6333` → hybrid retrieval on Qdrant (`docker run -p 6333:6333 qdrant/qdrant`)
 - `LOG_JSON=1` → structured logs
-- Telephony: implement an Exotel media-stream adapter against the same `VoiceSession`
-  (WS protocol already transport-agnostic; 8 kHz resample at the edge)
+- Telephony: the Exotel media-stream adapter runs against the same `VoiceSession`
+  (WS protocol transport-agnostic; resample at the edge)
 - Checklist: `docs/PRODUCTION_CHECKLIST.md`

@@ -55,6 +55,7 @@ class SarvamSTTStream:
         self._parts: list[str] = []              # transcript pieces this window
         self._final_evt = asyncio.Event()
         self._lang = None                        # language the socket was opened with
+        self._early_flushed_at: float = 0.0      # monotonic time of last early flush
         self.disabled = False                    # tripped on any error → REST only
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -142,6 +143,22 @@ class SarvamSTTStream:
         """Cheap idempotent connect used at call start / language change."""
         await self._ensure_connected()
 
+    def early_flush(self) -> None:
+        """LATENCY: called by ws_voice when the caller has been silent for
+        ~stt_early_flush_silence_ms but BEFORE the endpointer's full hangover
+        elapses. Sends the flush signal now, so Sarvam finalizes the segment
+        while we are still waiting out the hangover — by the time UTTERANCE
+        fires, the transcript is usually already in self._parts and finalize()
+        returns in single-digit milliseconds. If the caller resumes speaking,
+        the next segment simply appends; nothing is lost."""
+        if self.disabled or self._ws is None:
+            return
+        try:
+            self._q.put_nowait(None)                 # flush marker
+            self._early_flushed_at = time.monotonic()
+        except asyncio.QueueFull:
+            pass
+
     async def finalize(self) -> Transcript | None:
         """Caller stopped (our endpointer fired): flush and return everything
         transcribed for this window. None → REST fallback."""
@@ -149,7 +166,10 @@ class SarvamSTTStream:
             return None
         try:
             self._final_evt.clear()
-            self._q.put_nowait(None)                     # flush marker
+            # Skip the duplicate flush if an early flush went out within the
+            # last second (the segment is already finalizing server-side).
+            if time.monotonic() - self._early_flushed_at > 1.0:
+                self._q.put_nowait(None)                 # flush marker
             deadline = time.monotonic() + _FINALIZE_TIMEOUT_S
             # wait for at least one (more) data message, then a short settle
             while not self._parts and time.monotonic() < deadline:
@@ -160,8 +180,11 @@ class SarvamSTTStream:
             if not self._parts:
                 log.info("stt-stream: no transcript by deadline — REST fallback")
                 return None
-            # brief settle window to catch a trailing segment
-            await asyncio.sleep(0.08)
+            # brief settle window to catch a trailing segment. After an early
+            # flush the segment has already had its settle time during the
+            # hangover — a token 30 ms is enough; cold finalize keeps 80 ms.
+            early = time.monotonic() - self._early_flushed_at < 1.0
+            await asyncio.sleep(0.03 if early else 0.08)
             text = " ".join(self._parts).strip()
             self._parts.clear()
             # Streaming endpoint doesn't return a reliable language id — let the

@@ -1,8 +1,8 @@
 """Style-profile library — the Voice Director's palette.
 
 Each conversation phase gets a distinct 'performance': greeting is warm and
-medium-paced; verification is deliberate and slower so numbers land; an outage
-is calm and concerned; an emergency is calm but direct. Caller-emotion
+medium-paced; verification is deliberate and slower so numbers land; a dead
+connection is met calm and concerned; a fraud incident is calm but direct. Caller-emotion
 modifiers layer on top (an angry caller is met with more patience and a
 slightly slower, steadier pace — never matched heat).
 """
@@ -26,8 +26,8 @@ PROFILES: dict[StyleName, StyleProfile] = {
         lead_in=True, hesitation_ok=True, number_pace=0.8,
         max_thought_chars=130, label="clear, deliberate, slower for numbers",
     ),
-    StyleName.OUTAGE: StyleProfile(
-        name=StyleName.OUTAGE, emotion=Emotion.CONCERNED,
+    StyleName.SERVICE_DOWN: StyleProfile(
+        name=StyleName.SERVICE_DOWN, emotion=Emotion.CONCERNED,
         pace=0.97, pause_scale=1.1, warmth=0.8,
         lead_in=True, hesitation_ok=True, number_pace=0.85,
         label="calm, reassuring",

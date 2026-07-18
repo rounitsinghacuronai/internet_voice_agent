@@ -1,0 +1,41 @@
+id: recharge_payments
+title: Recharge, bill payment and refund rules
+category: billing
+kind: policy
+source: "Syncbroad Networks Billing Policy 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: Recharge failed but money debited
+    keywords: [recharge failed, paisa kat gaya, पैसे कट, रिचार्ज फेल, refund]
+    text: >
+      If a recharge fails but the amount is debited, the bank auto-reverses it in
+      5 to 7 working days — no action needed. If the pack did not activate within
+      30 minutes and the money was NOT reversed, register a "Recharge - Failed"
+      ticket; resolution SLA is 4 hours.
+  - title: Payment methods and AutoPay
+    keywords: [payment, upi, autopay, ऑटोपे, भुगतान]
+    text: >
+      Payments accepted via UPI, credit/debit card, net banking and wallets, in the
+      app, on the website, or at any Syncbroad Networks store. AutoPay can be set on
+      postpaid and fiber accounts against UPI or card; it charges the bill amount
+      on the due date and can be cancelled any time before 24 hours of the due date.
+  - title: Due dates and late fees
+    keywords: [due date, late fee, विलंब शुल्क, deadline]
+    text: >
+      Postpaid and fiber bills are due 15 days after invoice date. A late fee of
+      Rs 100 applies after the due date; service is suspended for non-payment 15
+      days after the due date and reactivated within 4 hours of payment.
+  - title: Refunds and security deposit
+    keywords: [refund, security deposit, अनामत, डिपॉझिट]
+    text: >
+      Security deposits (enterprise and some fiber plans) are refunded within 60
+      days of disconnection after adjusting dues. Excess payments and double
+      payments are auto-adjusted in the next invoice, or refunded to the original
+      payment method on request within 7 to 10 working days.
+  - title: GST invoice and duplicate bill
+    keywords: [gst invoice, duplicate bill, इनवॉइस, बिल कॉपी]
+    text: >
+      GST invoices with the customer's GSTIN can be enabled on any postpaid/fiber
+      account; the GSTIN must be added before the bill cycle closes. Duplicate
+      bills for the last 12 months are sent free by email or SMS link.

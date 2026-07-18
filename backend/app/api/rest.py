@@ -27,6 +27,17 @@ async def health(request: Request):
     }
 
 
+@router.get("/tickets")
+async def tickets(request: Request, q: str = "", limit: int = 100):
+    """Ops dashboard: notification tickets with WhatsApp delivery status.
+    Free-text q matches ticket id, customer, mobile, account, category,
+    priority, status and summary."""
+    svc = getattr(request.app.state.deps, "notifications", None)
+    if svc is None:
+        return {"tickets": []}
+    return {"tickets": svc.store.search(q, min(limit, 500))}
+
+
 @router.get("/kb/search")
 async def kb_search(request: Request, q: str, category: str | None = None):
     return await request.app.state.deps.retriever.search(q, category)

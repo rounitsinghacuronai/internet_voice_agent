@@ -35,21 +35,21 @@ _COMMANDS: dict[str, list[str]] = {
 # common words (e.g. bare "आप" was removed from Hindi: it sits inside Marathi
 # "आपण/आपले"; bare "तुम" removed from Marathi: it IS a Hindi word).
 _MR_MARKERS = ["आहे", "आहेत", "नाही", "का?", "मला", "माझ", "तुमच", "तुम्ही", "आपण",
-               "झाल", "करा", "करतो", "मध्ये", "कसे", "कशी", "काय", "वीज", "गेली",
+               "झाल", "करा", "करतो", "मध्ये", "कसे", "कशी", "काय", "नेटवर्क नाही", "गेली",
                "आलं", "आलाय", "पाहिजे", "बोलत", "मी ", "जास्त", "खूप", "सांग",
                "द्या", "होय", "बरं", "करू", "येत"]
 _HI_MARKERS = ["है", "हैं", "नहीं", "मुझे", "मेरा", "मेरी", "मेरे", "आपका", "आपको",
                "आपकी", "आपसे", "हुआ", "हुई", "करो", "कीजिए", "दीजिए", "में", "कैसे",
-               "क्या", "गया", "गई", "चाहिए", "रहा", "रही", "रहे", "बिजली", "बहुत",
+               "क्या", "गया", "गई", "चाहिए", "रहा", "रही", "रहे", "क्यों", "बहुत",
                "ज्यादा", "ज़्यादा", "अभी", "बता", "हो गया", "कर दो"]
 
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 _LATIN = re.compile(r"[A-Za-z]")
 
 # romanized Hindi/Marathi markers (codemix STT often outputs Latin script)
-_ROM_HI = ["nahi", "hai", "mera", "bijli", "aa rahi", "gaya", "kyu", "zyada", "bahut", "karo",
+_ROM_HI = ["nahi", "hai", "mera", "matlab", "aa rahi", "gaya", "kyu", "zyada", "bahut", "karo",
            "chahiye", "kitna", "paisa", "bhai", "haan", "theek"]
-_ROM_MR = ["aahe", "nahi ye", "majha", "mazha", "vij", "geli", "kiti", "pahije", "zala",
+_ROM_MR = ["aahe", "nahi ye", "majha", "mazha", "kasa", "geli", "kiti", "pahije", "zala",
            "karaycha", "ho ka", "barobar", "madhe"]
 
 
@@ -158,7 +158,7 @@ class LanguageEngine:
                 "must be in it until they ask otherwise."
                 if self.pinned else
                 "Reply ENTIRELY in this language. Everyday English loanwords the caller "
-                "themselves uses (bill, light, meter, complaint) are fine inside it — "
+                "themselves uses (bill, recharge, network, data) are fine inside it — "
                 "but NEVER blend Hindi and Marathi: a Marathi reply contains zero Hindi "
                 "words or grammar (no है/नहीं/करो/मेरा), a Hindi reply contains zero "
                 "Marathi (no आहे/नाही/करा/माझा). Never jump languages on your own.")

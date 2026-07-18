@@ -4,7 +4,7 @@
 - [ ] TLS everywhere (wss://); terminate at a reverse proxy (nginx/caddy)
 - [ ] Rotate SARVAM/GEMINI keys into a secret manager (not .env on disk)
 - [ ] Real OTP delivery via SMS gateway; remove `mock_otp_for_demo` from send_otp
-- [ ] PII handling: mask consumer/mobile numbers in logs; define transcript retention policy
+- [ ] PII handling: mask account/mobile numbers in logs; define transcript retention policy
 - [ ] Rate limiting per IP/session on /ws/call and /chat
 - [ ] Auth for /kb/reload and debug endpoints
 - [ ] Call recording consent line if calls are recorded (regulatory)
@@ -22,7 +22,7 @@
 - [ ] Vertex AI regional endpoint (asia-south1) for Gemini to cut India RTT
 - [ ] Pre-warm TTS cache with greetings/closings at startup
 - [ ] Tune VAD_END_SILENCE_MS per real call data (rural callers pause longer)
-- [ ] A/B test TTS speakers/pace with real consumers
+- [ ] A/B test TTS speakers/pace with real customers
 
 ## Knowledge & model governance
 - [ ] OCR the scanned safety manuals (tesseract mar+hin) and ingest via structure_with_llm.py
@@ -34,7 +34,7 @@
 
 ## Telephony (Exotel)
 - [ ] Exotel Voice Streaming (WS) adapter: 8 kHz PCM/μ-law ↔ 16 kHz resample into VoiceSession
-- [ ] DTMF fallback for consumer-number entry when ASR confidence is low
+- [ ] DTMF fallback for account-number entry when ASR confidence is low
 - [ ] Transfer_to_human wired to the real ACD queue with context summary passed as call metadata
 - [ ] Load test: 100 concurrent calls (WS fan-out, Sarvam/Gemini quota headroom)
 

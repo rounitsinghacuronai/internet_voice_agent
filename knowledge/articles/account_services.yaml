@@ -1,0 +1,37 @@
+id: account_services
+title: Account changes, suspension and cancellation
+category: account
+kind: policy
+source: "Syncbroad Networks Account Ops Manual 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: Contact and address updates
+    keywords: [address change, email update, mobile update, पत्ता बदल]
+    text: >
+      Registered email and alternate contact number can be updated on this call
+      after verification. A billing/installation address change needs new address
+      proof via the app or a store; fiber relocation additionally needs a
+      feasibility check at the new address.
+  - title: Ownership transfer
+    keywords: [ownership transfer, name change, नाव बदल, मालकी]
+    text: >
+      Transferring an account to another person needs both parties' KYC at a store,
+      plus a no-dues state. Processing takes up to 7 days ("Account - Ownership
+      Transfer" SLA 168 hours). Prepaid numbers transfer with a fresh KYC by the
+      new owner.
+  - title: Suspension and reactivation
+    keywords: [suspend, safe custody, reactivate, बंद करा, निलंबन]
+    text: >
+      Voluntary suspension (safe custody) parks a postpaid/fiber account for up to
+      90 days at Rs 49/month. Reactivation is same-day on request. Non-payment
+      suspension reactivates within 4 hours of clearing dues. A prepaid number
+      with no recharge is deactivated after 90 days of zero balance and recycled
+      after a further 15-day grace.
+  - title: Cancellation
+    keywords: [cancel, disconnect, बंद, cancellation]
+    text: >
+      Cancellation requests are honoured without retention pressure — offer one
+      alternative at most. Fiber: 7-day notice; rented ONT/router collected by the
+      engineer; deposit refund within 60 days. Postpaid: final bill after cycle
+      close. Agents log "Cancellation Request" (72-hour SLA).

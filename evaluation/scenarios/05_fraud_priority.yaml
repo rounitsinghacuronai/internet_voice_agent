@@ -1,0 +1,4 @@
+name: Fraud incident — fast path, protect the customer first
+turns:
+  - user: "भाई किसी ने मुझसे OTP माँग के मेरे अकाउंट से पैसे निकाल लिए, fraud हो गया!"
+    expect: {language: hi, contains: ["OTP"]}

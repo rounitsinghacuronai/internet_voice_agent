@@ -2,18 +2,31 @@ id: call_scripts
 title: Official call scripts and communication guidelines
 category: general
 kind: script
-source: "Training Manual pp.16-18"
+source: "Syncbroad Networks CC Playbook 2026-07"
 version: "2026-07"
 language: mixed
 sections:
   - title: Official opening, hold and closing lines
     keywords: [script, greeting, closing, opening]
     text: >
-      Opening - Marathi: "नमस्कार महावितरण, मी (नाव) आपली कशा प्रकारे मदत करू शकते?"
-      Hindi: "नमस्कार महावितरण, मैं (नाम) आपकी किस प्रकार सहायता कर सकती हूँ?"
-      English: "Good morning/afternoon/evening, Mahavitaran, myself (name), how may I help you?"
+      Opening - Marathi: "सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. मी (नाव), आपली कशा प्रकारे मदत करू शकते?"
+      Hindi: "सिंकब्रॉड नेटवर्क्स ग्राहक सेवा में आपका स्वागत है. मैं (नाम), आपकी किस प्रकार सहायता कर सकती हूँ?"
+      English: "Welcome to Syncbroad Networks customer care, myself (name), how may I help you?"
       Hold - ask permission for a 30-second hold and thank the caller on release.
-      Closing - Marathi: "महावितरणमध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो."
-      Hindi: "महावितरण में संपर्क करने के लिए धन्यवाद. आपका दिन शुभ रहे."
-      English: "Thank you for calling Mahavitaran. Have a nice day."
+      Closing - Marathi: "सिंकब्रॉड नेटवर्क्समध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो."
+      Hindi: "सिंकब्रॉड नेटवर्क्स में संपर्क करने के लिए धन्यवाद. आपका दिन शुभ रहे."
+      English: "Thank you for calling Syncbroad Networks. Have a nice day."
       No response - repeat the prompt up to 3 times, then politely disconnect.
+  - title: Verification wording
+    keywords: [verification, account number, mobile number]
+    text: >
+      Ask for the registered mobile number OR the 12-digit account number, softly,
+      one at a time. Never ask for both when one is enough. Never ask the caller's
+      name before verification — the system returns it. OTP is requested ONLY for
+      plan changes and SIM swap/eSIM, never for reading information.
+  - title: Helplines
+    keywords: [helpline, contact, complaint number, टोल फ्री]
+    text: >
+      Syncbroad Networks care: 121 (from own SIM), 1800-121-1212 (any phone, toll-free).
+      Enterprise NOC: 1800-121-9999. National cybercrime helpline: 1930. Emergency
+      services: 112. TRAI DND: 1909.

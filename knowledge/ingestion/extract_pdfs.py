@@ -2,7 +2,7 @@
 
 Usage:  python knowledge/ingestion/extract_pdfs.py <pdf_dir> [out_dir]
 
-Notes from the MSEDCL corpus:
+Notes from the source-document corpus:
   • Training manual & diary extract cleanly.
   • SafetyManual / SurakshaPustika are scanned images → need OCR (tesseract with
     mar+hin+eng traineddata) — flagged in the report.

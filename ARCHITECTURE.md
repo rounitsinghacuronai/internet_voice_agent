@@ -1,6 +1,6 @@
-# Mahavitaran Voice — Architecture
+# Syncbroad Networks Voice — Architecture
 
-Production AI voice customer-care platform for MSEDCL. Replaces the Dograh build with a
+Production AI voice customer-care platform for Syncbroad Networks (mobile, broadband & fiber). Replaces the Dograh build with a
 single, self-owned stack: one FastAPI backend, one browser client, no proxy shims.
 
 ## Why the old build died (lessons applied)
@@ -38,13 +38,13 @@ infra; flip `QDRANT_URL` to go production.
 
 **Embeddings: Gemini `gemini-embedding-001` (dense) + BM25 (sparse).** No 2 GB local model
 download; multilingual (hi/mr/en) out of the box; BM25 gives exact-term recall for codes
-like "A-1 form", "Supply Failed - Phase out". Offline hash-embedder fallback keeps tests
+like "UPC code", "Broadband - No Internet". Offline hash-embedder fallback keeps tests
 runnable without keys.
 
 **Tools: in-process services, not a second HTTP server.** The old mock backend was a
-separate FastAPI app because Dograh needed HTTP. We don't. Same 14 tools + `search_knowledge`,
+separate FastAPI app because Dograh needed HTTP. We don't. Same live tools + `search_knowledge`,
 same SQLite seed data, same hard verify-gate — now a `ToolRegistry` the orchestrator calls
-directly. Real MSEDCL APIs later = swap the service implementation behind the same schema.
+directly. Real OSS/BSS APIs later = swap the service implementation behind the same schema.
 
 **STT: Sarvam Saaras, utterance-scoped.** Endpointing is ours (Silero VAD state machine),
 so STT sees one clean utterance per request — `mode=codemix`, `language=unknown`
@@ -65,8 +65,8 @@ Browser mic ──getUserMedia(AEC,AGC,NS)──► AudioWorklet ──PCM16 16k
                     ├─ Sarvam STT (utterance → text + language hint)
                     ├─ ConversationManager
                     │   ├─ LanguageEngine  (deterministic detect/persist/switch)
-                    │   ├─ SafetyGate      (hazard keywords → emergency path, skips everything)
-                    │   ├─ CallMemory      (slots: consumer_no, mobile, name, lang, location,
+                    │   ├─ SecurityGate    (fraud/SIM-swap/stolen keywords → priority path, skips everything)
+                    │   ├─ CallMemory      (slots: account_no, mobile, name, lang, location, plan,
                     │   │                   complaints, verified, open_issues)
                     │   ├─ PromptComposer  (modules + memory block + lang directive)
                     │   ├─ Gemini loop     (stream; tool_calls → Orchestrator, max 4 rounds)
@@ -82,8 +82,8 @@ Browser mic ──getUserMedia(AEC,AGC,NS)──► AudioWorklet ──PCM16 16k
 
 Between the LLM's streamed sentences and Sarvam sits a deterministic layer that
 turns *AI reading text* into *a human speaking*. The **Voice Director** assigns one
-style profile per turn (greeting / verification / outage / billing /
-complaint-registered / emergency / closing, plus caller-emotion adaptation); the
+style profile per turn (greeting / verification / service-down / billing /
+ticket-registered / priority / closing, plus caller-emotion adaptation); the
 **Human Speech Engine** then adds an active-listening lead-in and genuine
 hesitation (only when a lookup actually ran), groups long lines for breathing,
 plans pauses by meaning, formats long numbers digit-by-digit, and emits one Sarvam
@@ -121,8 +121,11 @@ backend/app/
                      lexicon.py, variation.py, plan.py, evaluate.py
   prompts/           loader.py + modules/*.md (identity, style, language, tools,
                      memory, safety, escalation, closing, grounding)
-  tools/             registry.py (schemas+gates), msedcl.py (14 services), seed.py
+  tools/             registry.py (schemas+gates), telecom.py (25 live services)
   rag/               schemas.py, store.py (Qdrant + memory), retriever.py (hybrid+rerank)
+  notification_service/  async WhatsApp ops alerts: manager (queue/dedupe/status),
+                     ticket_formatter, whatsapp_sender (pluggable), retry, audit
+whatsapp_bridge/     Node whatsapp-web.js sidecar (POC personal-account sender)
 knowledge/
   articles/*.yaml    structured knowledge (authored from the manuals — no raw PDFs)
   ingestion/         extract_pdfs.py, build_index.py

@@ -51,6 +51,13 @@ class Endpointer:
         self.frame_ms = FRAME / settings.input_sample_rate * 1000  # 32 ms
 
     @property
+    def silence_ms(self) -> float:
+        """Milliseconds of continuous silence inside the current utterance —
+        drives the streaming-STT early flush (ws_voice) that hides the flush
+        round-trip inside the end-of-speech hangover."""
+        return self._silence_ms
+
+    @property
     def in_speech(self) -> bool:
         """True while an utterance is currently being captured — the silence
         watchdog treats this as 'not silence' without counting it as caller

@@ -414,22 +414,22 @@ class TestConversationManagerBargein:
         )
         assert "complaint" in history_text.lower()
 
-    def test_consumer_number_retained_across_interruption(self):
-        """Memory slots (consumer_no, name, etc.) survive barge-in."""
+    def test_account_number_retained_across_interruption(self):
+        """Memory slots (account_no, name, etc.) survive barge-in."""
         mem = CallMemory()
-        mem.scan_user_text("मेरा नंबर 170012345678 है")
-        assert mem.consumer_no == "170012345678"
+        mem.scan_user_text("मेरा नंबर 300012345678 है")
+        assert mem.account_no == "300012345678"
 
-        # Simulate a barge-in: consumer_no must still be there
+        # Simulate a barge-in: account_no must still be there
         mem.scan_user_text("Wait, one more question")
-        assert mem.consumer_no == "170012345678"   # not overwritten
+        assert mem.account_no == "300012345678"   # not overwritten
 
     def test_language_updated_on_interruption_utterance(self):
         """If customer interrupts in Hindi, memory.language updates to 'hi'."""
         from backend.app.conversation.language import LanguageEngine
         lang = LanguageEngine()
         # AI was speaking Marathi
-        lang.update("लाईट गेली", "mr-IN")
+        lang.update("नेट गेलं आहे", "mr-IN")
         assert lang.language == "mr"
         # Customer interrupts in Hindi
         lang.update("hindi mein bolo please", "hi-IN")
@@ -441,13 +441,13 @@ class TestConversationManagerBargein:
         mem = CallMemory()
         mem.verified = True
         mem.verified_at = time.time()
-        mem.consumer_no = "170012345678"
+        mem.account_no = "300012345678"
         mem.name = "Rajesh Kumar"
 
         # Simulate what scan_user_text does during a barge-in utterance
         mem.scan_user_text("Wait, I wanted to ask about my bill")
         assert mem.verified
-        assert mem.consumer_no == "170012345678"
+        assert mem.account_no == "300012345678"
         assert mem.name == "Rajesh Kumar"
 
 
@@ -458,14 +458,14 @@ class TestConversationManagerBargein:
 class TestShieldedDispatch:
     def test_result_returned_when_not_cancelled(self):
         tools = MagicMock()
-        tools.dispatch = AsyncMock(return_value={"sr_no": "SR-999"})
+        tools.dispatch = AsyncMock(return_value={"ticket_no": "TC-999"})
         mem = CallMemory()
 
         async def run():
             return await _shielded_dispatch(tools, "register_complaint", {}, mem)
 
         result = asyncio.run(run())
-        assert result == {"sr_no": "SR-999"}
+        assert result == {"ticket_no": "TC-999"}
 
     def test_late_absorber_spawned_when_cancelled(self):
         """When the outer task is cancelled mid-dispatch, a background absorber runs."""
@@ -474,7 +474,7 @@ class TestShieldedDispatch:
         async def slow_tool(*args, **kwargs):
             await asyncio.sleep(0.1)
             call_log.append("finished")
-            return {"sr_no": "SR-123"}
+            return {"ticket_no": "TC-123"}
 
         async def run():
             tools = MagicMock()
@@ -504,7 +504,7 @@ class TestShieldedDispatch:
 
         async def slow_register(*args, **kwargs):
             await asyncio.sleep(0.1)
-            return {"verified": True, "consumer_no": "170012345678",
+            return {"verified": True, "account_no": "300012345678",
                     "name": "Test User", "mobile": "9999999999", "address": "Pune"}
 
         async def run():
@@ -521,8 +521,8 @@ class TestShieldedDispatch:
             mem.absorb_tool_result = tracking_absorb
 
             async def outer():
-                await _shielded_dispatch(tools, "verify_consumer",
-                                         {"consumer_no": "170012345678"}, mem)
+                await _shielded_dispatch(tools, "verify_customer",
+                                         {"account_no": "300012345678"}, mem)
 
             task = asyncio.create_task(outer())
             await asyncio.sleep(0.02)
@@ -535,8 +535,8 @@ class TestShieldedDispatch:
             return mem
 
         mem = asyncio.run(run())
-        # absorb_tool_result should have been called with verify_consumer result
-        assert any(t == "verify_consumer" for t, _ in absorbed)
+        # absorb_tool_result should have been called with verify_customer result
+        assert any(t == "verify_customer" for t, _ in absorbed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -715,11 +715,11 @@ class TestEdgeCases:
         result = im.classify_interruption("something", "wa")  # partial "wait"
         assert result == "accidental"
 
-    def test_multiple_consumer_numbers_in_one_utterance(self):
+    def test_multiple_account_numbers_in_one_utterance(self):
         """Only the first valid 12-digit number should be captured."""
         mem = CallMemory()
-        mem.scan_user_text("mera number 170012345678 hai aur 999999999999 bhi")
-        assert mem.consumer_no == "170012345678"   # first one wins
+        mem.scan_user_text("mera number 300012345678 hai aur 999999999999 bhi")
+        assert mem.account_no == "300012345678"   # first one wins
 
     def test_barge_in_during_idle_is_harmless(self, im, sm):
         """Barge-in should be silently rejected when in IDLE state."""

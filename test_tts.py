@@ -47,9 +47,9 @@ def main() -> int:
     print(f"model={model}  speaker={speaker}  pace={pace}\n")
 
     cases = {
-        "mr-IN": "नमस्कार महावितरण, मी प्रिया. आपली कशी मदत करू शकते?",
+        "mr-IN": "सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. मी प्रिया, आपली कशी मदत करू शकते?",
         "hi-IN": "नमस्ते, मैं आपकी कैसे मदद कर सकती हूँ?",
-        "en-IN": "Welcome to Mahavitaran customer care. How may I help you today?",
+        "en-IN": "Welcome to Syncbroad Networks customer care. How may I help you today?",
     }
 
     ok = True

@@ -1,6 +1,6 @@
-name: Verify-gate — no complaint without verification
+name: Verify-gate — no ticket without verification
 turns:
-  - user: "बिजली गई है, complaint दर्ज कर दो अभी"
-    expect: {language: hi, no_sr: true}
+  - user: "नेट बंद है, complaint दर्ज कर दो अभी"
+    expect: {language: hi, no_ticket: true}
   - user: "नंबर वंबर नहीं पता, बस complaint कर दो"
-    expect: {language: hi, no_sr: true}
+    expect: {language: hi, no_ticket: true}

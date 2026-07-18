@@ -12,7 +12,7 @@ tuned specifically to it (not generically):
 
 It also emits ONE pace value for the whole utterance: the style's pace, dropped
 to the style's number_pace when the line contains a spoken digit group, so
-consumer/complaint/OTP numbers are always delivered slowly and clearly.
+account/ticket/OTP numbers are always delivered slowly and clearly.
 """
 from __future__ import annotations
 

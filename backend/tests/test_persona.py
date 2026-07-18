@@ -100,7 +100,7 @@ def test_caller_addressed_forms_never_touched():
     # Second person (आप + हैं) and third person forms must survive unchanged.
     line = "आप ऑनलाइन भी भर सकती हैं, और आपकी बेटी भी कर सकती हैं."
     assert MAL.enforce_gender(line, "hi") == line
-    line_mr = "तुम्ही ॲपवरून भरू शकता, आणि वीज लगेच येते."
+    line_mr = "तुम्ही ॲपवरून भरू शकता, आणि सेवा लगेच सुरू होते."
     assert MAL.enforce_gender(line_mr, "mr") == line_mr
 
 

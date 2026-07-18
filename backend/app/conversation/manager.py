@@ -219,8 +219,30 @@ class ConversationManager:
         return self._MOOD_DIRECTIVES.get(self._caller_emotion or "", "")
 
     # ── public API ───────────────────────────────────────────────────────────
-    def greeting(self) -> TurnChunk:
-        text = self.persona.greeting
+    def recognize_caller(self, mobile: str | None) -> str | None:
+        """Caller-ID recognition. If `mobile` belongs to a registered subscriber,
+        preload their VERIFIED identity into call memory (caller ID is trusted —
+        no further verification is asked) and return their first name so the
+        greeting can address them personally. Returns None if unrecognized.
+
+        Reads/writes gate on memory.verified, so seeding it here means a
+        recognized caller can be helped immediately without re-stating identity."""
+        if not mobile:
+            return None
+        try:
+            res = self.tools.svc.verify_customer(mobile=mobile)
+        except Exception as e:  # never let recognition break call start
+            log.warning("caller recognition failed for %s: %s", mobile, e)
+            return None
+        if not res.get("verified"):
+            return None
+        self.memory.absorb_tool_result("verify_customer", {}, res)
+        name = res.get("name") or ""
+        return name.split()[0] if name else None
+
+    def greeting(self, caller_first_name: str | None = None) -> TurnChunk:
+        text = (self.persona.personal_greeting(caller_first_name)
+                if caller_first_name else self.persona.greeting)
         self.memory.history.append({"role": "assistant", "content": text})
         return self._voice_fixed(text, "mr", StyleName.GREETING)
 
@@ -261,7 +283,7 @@ class ConversationManager:
         nb = self.memory.number_buffer
         if nb.active and nb.field and (
                 getattr(self.memory, nb.field, None)
-                or (nb.field == "consumer_no" and self.memory.verified)):
+                or (nb.field == "account_no" and self.memory.verified)):
             nb.clear()
         active_lang = self.lang.update(user_text, stt_lang)
         self.memory.language = active_lang
@@ -298,7 +320,7 @@ class ConversationManager:
             yield self._voice_fixed(text, lang, StyleName.DEFAULT)
 
         # ── Number Recognition Engine: arm the buffer if the agent just asked
-        # for a consumer/mobile/OTP/meter number, so a fragmented reply across
+        # for an account/mobile/OTP number, so a fragmented reply across
         # multiple pauses gets merged instead of handled turn-by-turn.
         self._arm_number_collection_if_asked()
 
@@ -324,15 +346,15 @@ class ConversationManager:
         lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "mr"
         line = safety.safety_line(verdict, lang, self.persona)
         yield self._voice_fixed(line, lang, StyleName.EMERGENCY)     # speak FIRST
-        location = self.memory.location or user_text[:120]
-        # Safety tools: shield so barge-in cannot abort these critical writes
+        details = f"{user_text[:120]} | caller: {self.memory.mobile or 'unknown'}"
+        # Priority tools: shield so barge-in cannot abort these critical writes
         await _shielded_dispatch(
-            self.tools, "log_safety_incident",
-            {"type": verdict.incident_type, "location": location}, self.memory,
+            self.tools, "log_priority_incident",
+            {"type": verdict.incident_type, "details": details}, self.memory,
         )
         await _shielded_dispatch(
             self.tools, "transfer_to_human",
-            {"reason": "safety_emergency",
+            {"reason": "fraud_or_security_incident",
              "context_summary": f"{verdict.incident_type}: {user_text[:150]}"},
             self.memory,
         )
@@ -396,8 +418,14 @@ class ConversationManager:
                         buffer = parts[-1]
                     # ── secondary split: comma/pause for long buffers ───────
                     # If no sentence boundary found but buffer is long, split
-                    # at the last comma so TTS starts sooner.
-                    elif len(buffer) >= _FORCE_FLUSH_CHARS:
+                    # at the last comma so TTS starts sooner. LATENCY: while
+                    # NOTHING has been voiced yet this turn, the threshold drops
+                    # to llm_first_flush_chars (default 80) — first audio starts
+                    # ~200 ms sooner on a long opening sentence, and only that
+                    # first segment pays the split-prosody cost.
+                    elif len(buffer) >= (
+                            getattr(self.s, "llm_first_flush_chars", 80)
+                            if self._turn_is_first else _FORCE_FLUSH_CHARS):
                         pause_parts = _PAUSE_SPLIT.split(buffer)
                         if len(pause_parts) > 1:
                             # yield everything up to the last segment
@@ -432,11 +460,14 @@ class ConversationManager:
                 return
 
             # ── PERCEIVED-LATENCY SHIELD: never leave the caller in silence while
-            # tools + another LLM round run (observed: 10+ s of dead air). If the
-            # model called tools without saying anything first, speak a short,
-            # persona-correct thinking filler NOW — TTS plays it while the
-            # lookups and the next round execute.
-            if round_no == 0 and not spoken and not self.end_call_requested \
+            # tools + another LLM round run (observed: 10+ s of dead air). If this
+            # round called tools without saying anything first, speak a short,
+            # persona-correct thinking filler NOW — TTS plays it while the lookups
+            # and the next round execute. Fires on ANY silent tool round (not just
+            # round 0) so a multi-round tool loop never drops the caller into dead
+            # air mid-verification. The per-call VariationTracker guarantees the
+            # filler is never the same phrase twice in a row, so it stays human.
+            if not spoken and not self.end_call_requested \
                     and self.speech is not None:
                 from ..speech.lexicon import HESITATIONS, lang_table
                 filler = self.speech.variation.pick(
@@ -445,6 +476,12 @@ class ConversationManager:
                     self.memory.history.append(
                         {"role": "assistant", "content": filler + "…"})
                     yield self._voice_fixed(filler + "…", lang, StyleName.DEFAULT)
+
+            # PERCEIVED RESPONSIVENESS: tell the transport a lookup is running so
+            # the UI can show a live "Checking…" indicator while the tools + next
+            # LLM round execute. Non-audio, best-effort telemetry only; the
+            # transport re-asserts "speaking" on the next spoken sentence.
+            yield TurnChunk("status", text="checking")
 
             # ── tool execution — SHIELDED so barge-in cannot abort in-flight writes ──
             # content stays None: the spoken sentences were already eager-committed to
@@ -564,8 +601,8 @@ def _sanitize(text: str) -> str:
     sometimes writes a number/code out phonetically for natural speech, then adds
     a parenthetical "written form" repeat right after it (e.g. "SR two six zero...
     (SR260782D4E6)") — a habit from written text where a raw form in parens is
-    helpful, but here the TTS reads BOTH, so the caller hears the same complaint/
-    consumer/OTP number spoken twice in a row. Since nothing in a voice-only call
+    helpful, but here the TTS reads BOTH, so the caller hears the same ticket/
+    account/OTP number spoken twice in a row. Since nothing in a voice-only call
     should ever need a parenthetical aside (there's no reader to skip past it),
     dropping the content is always safe, not just a narrow fix for this one case.
     """

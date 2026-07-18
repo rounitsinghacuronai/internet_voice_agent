@@ -1,6 +1,6 @@
 """Before / after demo + naturalness report for the Human Speech Generation Engine.
 
-Runs a set of realistic MSEDCL replies — written the way a raw LLM tends to
+Runs a set of realistic Syncbroad Networks replies — written the way a raw LLM tends to
 produce them ("reads like text") — through the engine and prints the spoken
 result side by side, then a naturalness metrics comparison.
 
@@ -22,14 +22,14 @@ from backend.app.speech import SpeechContext, SpeechDirector, compare
 # (raw LLM line, context) — contexts mirror what the ConversationManager builds.
 CASES: list[tuple[str, SpeechContext]] = [
     (
-        "महावितरण ग्राहक सेवा केंद्रात आपले स्वागत आहे. मी प्रिया, आपली कशा प्रकारे मदत करू शकते?",
+        "सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. मी प्रिया, आपली कशा प्रकारे मदत करू शकते?",
         SpeechContext(
             language="mr", turn_no=0, is_greeting=True, is_first_utterance=True
         ),
     ),
     (
-        "I understand. I will now verify your consumer account. Please note that your "
-        "consumer number is 170012345678.",
+        "I understand. I will now verify your customer account. Please note that your "
+        "account number is 300012345678.",
         SpeechContext(
             language="en",
             turn_no=1,

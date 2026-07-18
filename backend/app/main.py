@@ -22,8 +22,9 @@ from .providers.embeddings import make_embedder
 from .providers.gemini_llm import GeminiLLM
 from .providers.sarvam_stt import SarvamSTT
 from .providers.sarvam_tts import SarvamTTS
+from .notification_service import build_notification_service
 from .rag.retriever import HybridRetriever
-from .tools.msedcl import MsedclServices
+from .tools.telecom import TelecomServices
 from .tools.registry import ToolRegistry
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class Deps:
     tools: ToolRegistry
     retriever: HybridRetriever
     http: httpx.AsyncClient
+    notifications: object | None = None
     # Shared, loaded-once Silero VAD ONNX session — every VoiceSession reuses
     # this instead of each call reloading the model from scratch (see
     # audio/vad.py). None if onnxruntime/model unavailable (energy-gate
@@ -50,13 +52,30 @@ class Deps:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_json)
-    http = httpx.AsyncClient(limits=httpx.Limits(max_connections=50, max_keepalive_connections=20))
+    # HTTP/2 when the optional h2 package is installed: multiplexes concurrent
+    # Sarvam TTS prefetches + Gemini streams over fewer connections (~20-50 ms
+    # under load). Graceful HTTP/1.1 fallback when h2 is absent.
+    try:
+        import h2  # noqa: F401
+        _http2 = True
+    except ImportError:
+        _http2 = False
+    http = httpx.AsyncClient(
+        http2=_http2,
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20))
 
-    services = MsedclServices(settings.db_path)
+    services = TelecomServices(settings.db_path)
     embedder = make_embedder(settings, http)
     retriever = HybridRetriever(settings, embedder)
     tools = ToolRegistry(settings, services, retriever=retriever)
     tts = SarvamTTS(settings, http)
+
+    # WhatsApp ops notifications — fully decoupled: the registry fires a plain
+    # observer event; this service does everything else on a background worker.
+    llm_for_notify = GeminiLLM(settings, http)
+    notifications = build_notification_service(settings, llm=llm_for_notify)
+    notifications.start()
+    tools.on_event = notifications.notify_event
 
     # PERFORMANCE: load the VAD model once here instead of per-call (was adding
     # latency to every single call, even before the WebSocket finished accepting
@@ -72,6 +91,7 @@ async def lifespan(app: FastAPI):
         retriever=retriever,
         http=http,
         vad_session=vad_session,
+        notifications=notifications,
     )
     try:
         await retriever.build()
@@ -113,14 +133,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("Gemini pre-warm failed (%s) — first turn pays connection setup", e)
 
-    log.info("Mahavitaran Voice up — model=%s stt=%s tts=%s kb_chunks=%d exotel=%s@%dHz",
+    log.info("Syncbroad Networks Voice up — model=%s stt=%s tts=%s kb_chunks=%d exotel=%s@%dHz",
              settings.gemini_model, settings.stt_model, settings.tts_model,
              len(retriever.chunks), settings.exotel_enabled, settings.exotel_sample_rate)
     yield
+    try:
+        await notifications.close()
+    except Exception as e:
+        log.warning("notification service close: %s", e)
     await http.aclose()
 
 
-app = FastAPI(title="Mahavitaran Voice", version="1.0", lifespan=lifespan)
+app = FastAPI(title="Syncbroad Networks Voice", version="1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(ws_voice.router)
 app.include_router(exotel.router)
@@ -130,6 +154,11 @@ app.include_router(rest.router)
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(FRONTEND)
+
+
+@app.get("/ops", include_in_schema=False)
+def ops_dashboard():
+    return FileResponse(FRONTEND.parent / "ops.html")
 
 
 def run() -> None:

@@ -1,0 +1,8 @@
+name: Broadband down — Hindi caller, verify then troubleshoot
+turns:
+  - user: "हेलो, हमारा internet नहीं चल रहा है कल रात से"
+    expect: {language: hi, not_contains: ["नमस्कार सिंकब्रॉड नेटवर्क्स, मी"]}
+  - user: "मेरा account number 210034567890 है"
+    expect: {language: hi, verified: true}
+  - user: "हाँ ठीक है, कब तक चालू होगा?"
+    expect: {language: hi}

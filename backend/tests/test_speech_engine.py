@@ -68,12 +68,12 @@ def test_clean_strips_parentheses_and_markdown():
 
 
 # ── Number Pronunciation Planning (output side) ──────────────────────────────
-def test_consumer_number_grouped_444():
+def test_account_number_grouped_444():
     out, changed = format_numbers_for_speech(
-        "Your consumer number is 170012345678.", "en"
+        "Your account number is 300012345678.", "en"
     )
     assert changed
-    assert "1 7 0 0, 1 2 3 4, 5 6 7 8" in out
+    assert "3 0 0 0, 1 2 3 4, 5 6 7 8" in out
 
 
 def test_mobile_number_grouped_55():
@@ -92,7 +92,7 @@ def test_amount_is_not_digit_grouped():
 
 
 def test_number_formatting_is_idempotent():
-    once, _ = format_numbers_for_speech("consumer 170012345678", "en")
+    once, _ = format_numbers_for_speech("account 300012345678", "en")
     twice, _ = format_numbers_for_speech(once, "en")
     assert once == twice
 
@@ -111,7 +111,7 @@ def test_director_picks_greeting_and_closing():
 
 def test_director_picks_verification_when_asking_for_number():
     d = VoiceDirector()
-    p = d.direct(SpeechContext(asking_for_number="consumer_no", verified=False))
+    p = d.direct(SpeechContext(asking_for_number="account_no", verified=False))
     assert p.name is StyleName.VERIFICATION
     assert p.number_pace <= 0.8  # slower for numbers
 
@@ -125,7 +125,7 @@ def test_director_picks_complaint_registered():
 def test_director_topic_styles():
     d = VoiceDirector()
     assert (
-        d.direct(SpeechContext(topic="outage", verified=True)).name is StyleName.OUTAGE
+        d.direct(SpeechContext(topic="internet", verified=True)).name is StyleName.SERVICE_DOWN
     )
     assert (
         d.direct(SpeechContext(topic="billing", verified=True)).name
@@ -135,7 +135,7 @@ def test_director_topic_styles():
 
 # ── caller-emotion sensing + adaptation ──────────────────────────────────────
 def test_detect_angry_and_worried():
-    assert detect_caller_emotion("light kab tak, har baar yahi hota hai") == "angry"
+    assert detect_caller_emotion("net kab tak, har baar yahi hota hai") == "angry"
     assert detect_caller_emotion("this is the worst service") == "angry"
     assert detect_caller_emotion("I'm scared there's a dangerous wire") == "worried"
     assert detect_caller_emotion("mera bill dekhna hai") is None
@@ -214,7 +214,7 @@ def test_long_line_is_broken_into_thought_groups():
 def test_question_gets_terminal_question_mark():
     sd = _director()
     ctx = SpeechContext(language="en", turn_no=1, is_first_utterance=False)
-    plan = sd.plan_line("Could you share your consumer number", ctx)
+    plan = sd.plan_line("Could you share your account number", ctx)
     assert plan.text.rstrip().endswith("?")
     assert plan.segments[-1].pause is PauseType.LISTENING
 
@@ -233,7 +233,7 @@ def test_pace_drops_for_long_numbers():
     ctx = SpeechContext(
         language="en", turn_no=1, is_first_utterance=False, verified=True
     )
-    plan = sd.plan_line("Your consumer number is 170012345678.", ctx)
+    plan = sd.plan_line("Your account number is 300012345678.", ctx)
     assert plan.pace <= 0.86  # dropped toward number_pace for clarity
 
 
@@ -258,8 +258,8 @@ def test_evaluator_shows_improvement_after_engine():
     before = [
         "Your complaint has been successfully registered and the estimated "
         "restoration time is thirty minutes.",
-        "I understand. I will now verify your consumer account. Please note that "
-        "your consumer number is 170012345678.",
+        "I understand. I will now verify your customer account. Please note that "
+        "your account number is 300012345678.",
     ]
     after, plans = [], []
     for i, line in enumerate(before):

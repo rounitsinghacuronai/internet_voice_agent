@@ -1,0 +1,40 @@
+id: fraud_security
+title: Fraud, scams and customer security
+category: safety
+kind: sop
+source: "Syncbroad Networks Security Desk SOP 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: OTP and KYC scams
+    keywords: [fraud, scam, otp share, फ्रॉड, धोखाधड़ी, केवायसी स्कॅम]
+    text: >
+      Syncbroad Networks NEVER asks customers for OTPs, passwords, card numbers, or to
+      install remote-access apps, and never threatens disconnection for "KYC
+      expiry" — all such calls/SMS are fraud. If a customer shared an OTP or
+      installed an app: log a priority incident immediately, advise changing bank
+      passwords, and direct them to the national cybercrime helpline 1930 and
+      cybercrime.gov.in if money moved.
+  - title: SIM-swap fraud
+    keywords: [sim swap, सिम स्वॅप, sim band, number hijack]
+    text: >
+      Signature: the customer's SIM suddenly shows no service while their number
+      stays active elsewhere, often followed by bank OTPs. Treat as an emergency:
+      verify by account number and personal details (their SIM cannot receive OTP),
+      block the compromised SIM, log the priority incident, and transfer to the
+      security desk. Advise the customer to alert their bank at once.
+  - title: Stolen or lost phone
+    keywords: [stolen phone, चोरी, हरवला, lost phone, block]
+    text: >
+      Block the SIM immediately after verification — never wait for OTP. Replacement
+      with the same number is free with photo ID. For the handset, advise an FIR
+      and IMEI blocking through the government CEIR portal (ceir.gov.in); we
+      provide the IMEI from our records if the customer needs it.
+  - title: Harassment and threat calls
+    keywords: [harassment, threat, धमकी, अश्लील, unknown calls]
+    text: >
+      For threatening/obscene/repeated unwanted calls: log a priority incident with
+      the caller's number, date and time; advise reporting to police (dial 112) for
+      threats. Number-blocking at network level is available on request. DND
+      registration (SMS START 0 to 1909) stops telemarketing but not personal
+      harassment — distinguish the two.

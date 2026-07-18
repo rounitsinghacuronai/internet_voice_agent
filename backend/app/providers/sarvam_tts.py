@@ -24,7 +24,7 @@ from .base import ProviderError
 log = logging.getLogger(__name__)
 
 # Sarvam target_language_code per engine language. Marathi is the fallback —
-# this deployment serves Maharashtra (Mahavitaran) only.
+# this deployment serves the Maharashtra circle only.
 _LANG_CODE = {"mr": "mr-IN", "hi": "hi-IN", "en": "en-IN"}
 
 

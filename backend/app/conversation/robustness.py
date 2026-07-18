@@ -107,14 +107,23 @@ def estimate_confidence(
 # another person in the room) bleeding into the transcript.
 
 _TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "outage": ("light gaya", "light gayi", "light gone", "बत्ती गेली", "लाईट गेली",
-               "current nahi", "current gone", "power cut", "power gone", "power outage",
-               "supply band", "supply gone", "electricity gone", "electricity has been gone",
-               "no electricity", "no power", "बिजली नहीं", "वीज गेली", "no supply"),
-    "billing": ("bill", "बिल", "बिलाची", "recharge", "payment", "बिल भरणे", "bijli bill"),
-    "complaint_status": ("complaint status", "track complaint", "sr number", "शिकायत",
-                          "तक्रार क्रमांक", "sr no"),
-    "new_connection": ("new connection", "नवीन कनेक्शन", "नया कनेक्शन", "application status"),
+    "network": ("no network", "network nahi", "network गया", "नेटवर्क नाही", "नेटवर्क नहीं",
+                "signal nahi", "no signal", "सिग्नल", "call drop", "कॉल ड्रॉप", "call cut",
+                "tower", "टॉवर", "roaming", "रोमिंग", "volte", "sms nahi", "data not working",
+                "data nahi chal", "internet slow on phone"),
+    "internet": ("internet nahi", "internet not working", "net nahi chal", "नेट चालत नाही",
+                 "नेट नहीं चल", "wifi", "वायफाय", "वाईफाई", "broadband", "ब्रॉडबँड",
+                 "ब्रॉडबैंड", "fiber", "फायबर", "router", "राउटर", "राऊटर", "red light",
+                 "लाल लाइट", "los", "slow internet", "speed kam", "स्पीड", "disconnect ho"),
+    "billing": ("bill", "बिल", "बिलाची", "recharge", "रिचार्ज", "payment", "पेमेंट",
+                "बिल भरणे", "balance", "बॅलन्स", "बैलेंस", "refund", "रिफंड", "plan",
+                "प्लॅन", "प्लान", "pack", "पॅक", "पैक"),
+    "sim": ("sim", "सिम", "esim", "ई-सिम", "porting", "पोर्ट", "mnp", "kyc", "केवायसी",
+            "sim band", "sim block", "नवीन सिम", "नया सिम"),
+    "complaint_status": ("complaint status", "track complaint", "ticket number", "शिकायत",
+                          "तक्रार क्रमांक", "ticket no", "तिकीट"),
+    "new_connection": ("new connection", "नवीन कनेक्शन", "नया कनेक्शन", "application status",
+                       "installation", "इन्स्टॉलेशन", "इंस्टालेशन"),
 }
 
 

@@ -2,8 +2,8 @@
 
 Sits above the Human Speech Engine. Instead of every response being read with
 the same cadence, the Director reads the conversation context and picks one
-StyleProfile for the whole turn — greeting, verification, outage, billing,
-complaint-registered, emergency, closing — then layers caller-emotion on top.
+StyleProfile for the whole turn — greeting, verification, service-down, billing,
+ticket-registered, priority, closing — then layers caller-emotion on top.
 The result is a consistent 'performance' rather than a flat voice.
 """
 from __future__ import annotations
@@ -87,10 +87,10 @@ class VoiceDirector:
                 and ctx.turn_no <= 2:
             # early identity-gathering turns lean deliberate/clear
             return StyleName.VERIFICATION
-        if ctx.topic == "outage":
-            return StyleName.OUTAGE
+        if ctx.topic in ("network", "internet"):
+            return StyleName.SERVICE_DOWN
         if ctx.topic == "billing":
             return StyleName.BILLING
-        if ctx.topic in ("complaint_status", "new_connection"):
+        if ctx.topic in ("sim", "complaint_status", "new_connection"):
             return StyleName.DEFAULT
         return StyleName.DEFAULT

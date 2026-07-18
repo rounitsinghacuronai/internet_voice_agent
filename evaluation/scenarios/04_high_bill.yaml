@@ -2,5 +2,5 @@ name: High bill — diagnose before registering
 turns:
   - user: "माझं बिल खूप जास्त आलंय या महिन्यात"
     expect: {language: mr}
-  - user: "consumer number 170023456789 आहे"
+  - user: "account number 300023456789 आहे"
     expect: {language: mr, verified: true, not_contains: ["कमी करून देते", "waive"]}

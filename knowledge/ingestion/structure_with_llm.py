@@ -1,7 +1,7 @@
 """Stage 2 of knowledge ingestion: extracted text → structured YAML knowledge articles,
 using Gemini Pro (quality over latency — this is offline).
 
-The shipped knowledge/articles/*.yaml were authored from the CCCC Training Manual and
+The shipped knowledge/articles/*.yaml were authored from the Syncbroad Networks playbooks and
 safety documents. Run this script to ingest NEW documents (circulars, tariff orders):
 
   GEMINI_API_KEY=... python knowledge/ingestion/structure_with_llm.py extracted/newdoc.txt
@@ -20,7 +20,7 @@ import httpx
 MODEL = os.environ.get("GEMINI_INGEST_MODEL", "gemini-2.5-pro")
 BASE = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
-PROMPT = """You are a knowledge engineer for MSEDCL's voice customer-care AI.
+PROMPT = """You are a knowledge engineer for Syncbroad Networks's voice customer-care AI.
 Convert the raw document text below into structured YAML knowledge articles.
 
 Rules:

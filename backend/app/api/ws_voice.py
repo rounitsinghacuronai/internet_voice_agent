@@ -161,6 +161,9 @@ class VoiceSession:
         self._lat: dict = {}
         self._lat_history: list[dict] = []
 
+        # Streaming-STT early flush bookkeeping (one flush per silence window).
+        self._early_flush_sent: bool = False
+
         # Streaming STT (optional, Settings.stt_streaming_enabled): transcribes
         # while the caller is still speaking. REST remains the fallback.
         self._stt_stream = None
@@ -180,8 +183,18 @@ class VoiceSession:
         await self._send({"type": "ready", "session_id": self.session_id})
         log.info("session %s: call started", self.session_id)
 
-        # Greeting
-        greeting = self.manager.greeting()
+        # CALLER-ID RECOGNITION: if the call arrives from a registered mobile
+        # (Exotel `from` on the phone leg, or ?from= on the browser demo), look
+        # the subscriber up, preload their verified identity, and greet by name.
+        caller_first = self.manager.recognize_caller(self._caller_mobile())
+        if caller_first:
+            log.info("session %s: recognized caller — greeting %s by name",
+                     self.session_id, caller_first)
+            # Push the recognized identity to the UI immediately (before any turn).
+            await self._send({"type": "memory", **self.manager.memory.snapshot()})
+
+        # Greeting (personalized when the caller was recognized)
+        greeting = self.manager.greeting(caller_first)
         self._greeting_active = True
         self.sm.transition(CallState.SPEAKING, "greeting")
         self._speaking_since = time.monotonic()
@@ -287,7 +300,23 @@ class VoiceSession:
             if event.type is EventType.SPEECH_START:
                 await self._on_speech_start()
             elif event.type is EventType.UTTERANCE:
+                self._early_flush_sent = False
                 await self._on_utterance(event.pcm16, event.peak_prob)
+
+        # LATENCY — streaming-STT EARLY FLUSH: the endpointer waits out the full
+        # vad_end_silence hangover (400 ms) before firing UTTERANCE, but Sarvam
+        # can start finalizing the moment the caller plausibly stopped. Once
+        # silence inside the current utterance crosses stt_early_flush_silence_ms
+        # (default 200), send the flush NOW — the transcript lands while the
+        # hangover is still ticking, so finalize() after UTTERANCE is nearly
+        # instant. If the caller resumes, the next segment appends harmlessly.
+        if self._stt_stream is not None and not self._stt_stream.disabled:
+            sil = self.endpointer.silence_ms
+            if sil < self.s.stt_early_flush_silence_ms:
+                self._early_flush_sent = False          # speech (re)started
+            elif self.endpointer.in_speech and not self._early_flush_sent:
+                self._early_flush_sent = True
+                self._stt_stream.early_flush()
 
         # DIAGNOSTIC: while the agent is speaking, surface how high the caller's
         # VAD probability climbs. If this stays well below the interrupt
@@ -424,8 +453,17 @@ class VoiceSession:
         guarantee the task reference stays stale and the next utterance from
         the caller appears to be ignored.
         """
+        stt_task: Optional[asyncio.Task] = None
         try:
             self._lat = {"t0": time.monotonic()}
+            # LATENCY — the streaming-STT finalize needs no cleaned audio (Sarvam
+            # already has every raw frame), so it starts NOW and overlaps the
+            # CPU-bound pipeline below instead of waiting behind it.
+            if self._stt_stream is not None and not self._stt_stream.disabled:
+                stt_task = asyncio.create_task(
+                    self._stt_stream.finalize(),
+                    name=f"stt_final_{self.session_id}",
+                )
             # Run CPU-bound audio processing (AGC → AEC → SpectralGate →
             # noisereduce) in a thread so the event loop stays free to keep
             # receiving mic frames.  Without this, a 3-4 s utterance causes
@@ -442,6 +480,13 @@ class VoiceSession:
                     self.session_id,
                     result.suppression_reason,
                 )
+                # Consume (and discard) the streamed transcript so this noise
+                # window's text can never leak into the NEXT turn's finalize.
+                if stt_task is not None:
+                    try:
+                        await stt_task
+                    except Exception:
+                        pass
                 self._lat = {}      # no turn ran — a stale timer would corrupt
                 self.sm.transition(CallState.LISTENING, "utterance_suppressed")
                 await self._send({"type": "state", "value": "listening"})
@@ -452,12 +497,16 @@ class VoiceSession:
             await self._send({"type": "state", "value": "thinking"})
 
             # STT — cancellable; second barge-in during STT just exits cleanly.
-            # Streaming path first (transcript mostly ready already); REST fallback.
+            # Streaming path first (transcript usually ready already — finalize
+            # started before the pipeline and the early flush landed during the
+            # endpoint hangover); REST fallback. stt_ms measures only the wait
+            # AFTER the pipeline, so the stage breakdown stays additive.
             t_stt = time.monotonic()
             try:
                 tr = None
-                if self._stt_stream is not None and not self._stt_stream.disabled:
-                    tr = await self._stt_stream.finalize()
+                if stt_task is not None:
+                    tr = await stt_task
+                    stt_task = None
                     if tr is not None:
                         self._lat["stt_stream"] = True
                 if tr is None:
@@ -493,7 +542,7 @@ class VoiceSession:
             self._no_response_count = 0
 
             # ── Number Recognition Engine: if the agent is mid-collection of a
-            # consumer/mobile/OTP/meter number and this utterance looks like a
+            # account/mobile/OTP number and this utterance looks like a
             # bare fragment of one, buffer it instead of running a full LLM
             # turn on a partial number. Only surfaces to the LLM once the
             # complete, validated number is assembled — see conversation/numbers.py.
@@ -670,12 +719,38 @@ class VoiceSession:
         """Drain TurnChunks from the producer and send audio to the client."""
         await self._send({"type": "state", "value": "speaking"})
         self.pipeline.notify_tts_started()
+        last_status = "speaking"
         try:
             while True:
                 chunk = await queue.get()
                 if chunk is None:
                     break
+                # Non-audio status pings (e.g. "checking" while a tool lookup runs)
+                # drive the client's live activity indicator without touching the
+                # audio path. Barge-in stays exactly as responsive.
+                if chunk.kind == "status":
+                    if chunk.text and chunk.text != last_status:
+                        last_status = chunk.text
+                        await self._send({"type": "state", "value": chunk.text})
+                    continue
                 if chunk.kind == "sentence":
+                    # Restore "speaking" if a status ping (e.g. "checking") was the
+                    # last thing the client heard about, so the indicator flips back
+                    # the instant real audio resumes.
+                    if last_status != "speaking":
+                        last_status = "speaking"
+                        await self._send({"type": "state", "value": "speaking"})
+                    # LATENCY — sentence N+1 prefetch: anything already waiting
+                    # in the queue starts synthesizing NOW, in parallel with
+                    # sentence N's synthesis + playback. In-flight de-dup in
+                    # SarvamTTS means the later synthesize() joins the same
+                    # network call instead of duplicating it — consecutive
+                    # sentences flow with no audible HTTP round-trip gap.
+                    for pending in list(queue._queue):  # noqa: SLF001
+                        if (pending is not None and pending.kind == "sentence"
+                                and pending.text):
+                            self.deps.tts.prefetch(
+                                pending.text, pending.language, pending.pace)
                     await self._speak_sentence(chunk)
         finally:
             self.pipeline.notify_tts_ended()
@@ -842,6 +917,28 @@ class VoiceSession:
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    def _caller_mobile(self) -> Optional[str]:
+        """Best-effort 10-digit caller mobile for caller-ID recognition.
+
+        Sources, in order: the telephony transport's `from_number` (Exotel start
+        message) or a `?from=`/`?caller=` query param on the WebSocket URL (the
+        browser demo simulates an incoming number). Any country-code prefix is
+        dropped to the trailing 10 digits; returns None if unusable."""
+        raw = getattr(self.ws, "from_number", None)
+        if not raw:
+            qp = getattr(self.ws, "query_params", None)
+            if qp:
+                try:
+                    raw = qp.get("from") or qp.get("caller")
+                except Exception:
+                    raw = None
+        if not raw:
+            return None
+        digits = "".join(ch for ch in str(raw) if ch.isdigit())
+        if len(digits) > 10:
+            digits = digits[-10:]
+        return digits if len(digits) == 10 else None
+
     def _log_first_audio_latency(self, t_tts_start: float) -> None:
         """Log the per-stage breakdown once, on the first audio byte of a turn.
 
@@ -879,7 +976,8 @@ class VoiceSession:
         for k in ("pipe", "stt", "llm", "tts", "total"):
             vals = [h[k] for h in hist]
             parts.append(f"{k} avg={sum(vals)/n:.0f} max={max(vals):.0f}")
-        log.info("session %s: LATENCY SUMMARY over %d turns | %s | target total<2000ms",
+        log.info("session %s: LATENCY SUMMARY over %d turns | %s | "
+                 "target total<800ms excl. endpoint (≈1200ms speech-to-speech)",
                  self.session_id, n, " | ".join(parts))
 
     def _advance_playhead(self, pcm: bytes) -> None:

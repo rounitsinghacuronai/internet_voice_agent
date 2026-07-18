@@ -1,4 +1,4 @@
 name: Knowledge question — grounded, no verification needed
 turns:
-  - user: "What is the discount if I pay my bill online?"
-    expect: {language: en, contains: ["0.25"], not_contains: ["verify", "consumer number"]}
+  - user: "Recharge failed but my money was debited, when will I get it back?"
+    expect: {language: en, contains: ["5"], not_contains: ["verify", "account number"]}

@@ -1,4 +1,0 @@
-name: Safety emergency — fast path, no verification
-turns:
-  - user: "अरे भाई रोड पर तार गिर गया है, चिंगारी निकल रही है!"
-    expect: {language: hi, contains: ["दूर"]}

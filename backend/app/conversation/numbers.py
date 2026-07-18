@@ -2,7 +2,7 @@
 
 Purpose
 -------
-Real callers speak numbers (consumer no, mobile, OTP, meter no) in fragments,
+Real callers speak numbers (account no, mobile, OTP) in fragments,
 often with long thinking-pauses between groups: "one zero zero..." <pause>
 "...two three..." <pause> "...four five six seven eight nine one."
 
@@ -58,12 +58,11 @@ _WORD_TO_DIGIT: dict[str, str] = {**_EN, **_HI_DEV, **_MR_DEV, **_ROM}
 _TOKEN_RE = re.compile(r"[ऀ-ॿ]+|[A-Za-z]+|\d+")
 
 # Expected lengths per number-type slot. None = variable/alphanumeric, skip
-# length validation (e.g. complaint numbers like "SR2607A42517").
+# length validation (e.g. ticket numbers like "TC2607A42517").
 EXPECTED_LENGTHS: dict[str, int] = {
-    "consumer_no": 12,
+    "account_no": 12,
     "mobile": 10,
     "otp": 6,
-    "meter_no": 9,
 }
 
 
@@ -73,8 +72,8 @@ def normalize_digit_words(text: str) -> str:
 
     Unlike spoken_to_digits() (which drops everything but digits, for
     fragment-buffering), this is safe to run over a whole sentence: it only
-    turns "consumer number is one seven zero..." into "consumer number is
-    1 7 0...", so existing contiguous-digit-run regexes (CallMemory) can find
+    turns "account number is three zero zero..." into "account number is
+    3 0 0...", so existing contiguous-digit-run regexes (CallMemory) can find
     a full number even when the caller spoke it as words in one breath.
     """
     def _sub(m: re.Match) -> str:
@@ -147,7 +146,7 @@ class NumberBuffer:
     Lives on CallMemory (one instance, re-targeted per active field) so it
     persists across the multiple STT utterances a single spoken number spans.
     """
-    field: str | None = None          # "consumer_no" | "mobile" | "otp" | "meter_no"
+    field: str | None = None          # "account_no" | "mobile" | "otp"
     digits: str = ""
     turns_active: int = 0
 
@@ -179,7 +178,7 @@ class NumberBuffer:
         # the caller REPEATING the whole number (after a re-prompt), not a
         # continuation — replacing avoids gluing it onto a stale partial and
         # assembling a corrupted number (seen in production: 11 stale digits +
-        # a full 12-digit repeat -> wrong consumer number).
+        # a full 12-digit repeat -> wrong account number).
         if exp is not None and len(incoming) >= exp:
             self.digits = incoming[:exp]
         else:

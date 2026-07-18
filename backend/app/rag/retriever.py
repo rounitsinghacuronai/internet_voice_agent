@@ -71,7 +71,7 @@ class HybridRetriever:
         if not query.strip() or self.store is None:
             return SearchResult([], 0.0, True).to_tool_payload()
         k = self.s.retrieval_top_k
-        cat = category if category in ("billing", "safety", "complaints", "connections", "general") else None
+        cat = category if category in ("mobile", "broadband", "billing", "sim", "network", "account", "enterprise", "complaints", "safety", "connections", "general") else None
 
         qv = (await self.embedder.embed([query]))[0]
         # PERFORMANCE: store.dense_search is a BLOCKING call when backed by QdrantStore

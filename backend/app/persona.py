@@ -96,6 +96,9 @@ class PersonaContext:
     role: str
     voice: str                        # default TTS speaker for this gender
     greeting: str = ""
+    # Personalized opener for a recognized caller (call from a registered mobile).
+    # Contains a literal "{first}" placeholder filled with the caller's first name.
+    greeting_personal: str = ""
     apology: dict = field(default_factory=dict)
     silence_nudge: dict = field(default_factory=dict)
     no_response_closing: dict = field(default_factory=dict)
@@ -103,11 +106,20 @@ class PersonaContext:
     safety_generic: dict = field(default_factory=dict)
     safety_shock: dict = field(default_factory=dict)
 
+    # ── recognized-caller opener ─────────────────────────────────────────────
+    def personal_greeting(self, first_name: str) -> str:
+        """Opener when the caller is recognized from a registered mobile. Falls
+        back to the standard greeting if no name or template is available."""
+        first = (first_name or "").strip()
+        if not first or not self.greeting_personal:
+            return self.greeting
+        return self.greeting_personal.replace("{first}", first)
+
     # ── prompt integration ───────────────────────────────────────────────────
     def identity_line(self) -> str:
         return (f"You are {self.name}, a warm, experienced {self.role} at "
-                "Mahavitaran (MSEDCL), Maharashtra's electricity distribution "
-                "company, on a live phone call.")
+                "Syncbroad Networks, a leading mobile, broadband and fiber provider, "
+                "on a live phone call.")
 
     def gender_grammar_rules(self) -> str:
         if self.gender == FEMALE:
@@ -166,14 +178,21 @@ def _build(name: str, gender: str, role: str, voice: str) -> PersonaContext:
     f = gender == FEMALE
     # Marathi/Hindi first-person forms for the fixed, reviewed lines
     mr_can = "करू शकते" if f else "करू शकतो"
+    mr_speaking = "बोलतेय" if f else "बोलतोय"      # "…speaking" — gendered
     hi_can = "कर सकती हूँ" if f else "कर सकता हूँ"
     mr_log = "नोंदवते" if f else "नोंदवतो"
     hi_log = "कर रही हूँ" if f else "कर रहा हूँ"
+    mr_block = "करते" if f else "करतो"
+    hi_block = "करती हूँ" if f else "करता हूँ"
+    hi_taking = "ले रही हूँ" if f else "ले रहा हूँ"
+    hi_connect = "जोड़ रही हूँ" if f else "जोड़ रहा हूँ"
 
     return PersonaContext(
         name=name, gender=gender, role=role, voice=voice,
-        greeting=("महावितरण ग्राहक सेवा केंद्रात आपले स्वागत आहे. "
+        greeting=("सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. "
                   f"मी {name}, आपली कशा प्रकारे मदत {mr_can}?"),
+        greeting_personal=(f"नमस्कार {{first}}! सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. "
+                           f"मी {name} {mr_speaking}, आपली कशा प्रकारे मदत {mr_can}?"),
         apology={
             "mr": "माफ करा, थोडी तांत्रिक अडचण आली. कृपया पुन्हा सांगाल का?",
             "hi": "माफ़ कीजिए, थोड़ी तकनीकी दिक्कत आ गई. कृपया दोबारा बताइए?",
@@ -186,32 +205,36 @@ def _build(name: str, gender: str, role: str, voice: str) -> PersonaContext:
         },
         no_response_closing={
             "mr": ("तुमच्याकडून कोणतेही प्रतिउत्तर न आल्यामुळे आपला कॉल डिस्कनेक्ट करण्यात येत आहे. "
-                   "महावितरणमध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो."),
+                   "सिंकब्रॉड नेटवर्क्समध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो."),
             "hi": ("आपकी ओर से कोई प्रति-उत्तर न आने के कारण आपका कॉल डिस्कनेक्ट किया जा रहा है. "
-                   "महावितरण में संपर्क करने के लिए धन्यवाद. आपका दिन शुभ रहे."),
+                   "सिंकब्रॉड नेटवर्क्स में संपर्क करने के लिए धन्यवाद. आपका दिन शुभ रहे."),
             "en": ("As there's no response from your side, this call is being disconnected. "
-                   "Thank you for calling Mahavitaran. Have a nice day."),
+                   "Thank you for calling Syncbroad Networks. Have a nice day."),
         },
         emergency_follow={
-            "mr": "आपत्कालीन टीमला कळवलं आहे, ते तातडीने पोहोचतील. नक्की ठिकाण सांगू शकाल का?",
-            "hi": "इमरजेंसी टीम को सूचना दे दी है, वे तुरंत पहुँचेंगे. सटीक जगह बता दीजिए?",
-            "en": "The emergency team has been alerted and is on its way. Can you confirm the exact location?",
+            "mr": ("फ्रॉड आणि सुरक्षा टीमला कळवलं आहे, आणि मी आपल्याला वरिष्ठ अधिकाऱ्याशी जोडत आहे. "
+                   "नेमकं काय झालं ते थोडक्यात सांगू शकाल का?"),
+            "hi": (f"फ्रॉड और सुरक्षा टीम को सूचना दे दी है, और मैं आपको सीनियर अधिकारी से {hi_connect}. "
+                   "ठीक-ठीक क्या हुआ, थोड़े में बता दीजिए?"),
+            "en": ("Our fraud and security team has been alerted, and I'm connecting you to a "
+                   "senior officer. Can you briefly tell me exactly what happened?"),
         },
         safety_generic={
-            "mr": ("कृपया त्या ठिकाणापासून लगेच दूर व्हा आणि कुणालाही जवळ जाऊ देऊ नका. "
-                   f"मी ही आपत्कालीन तक्रार लगेच {mr_log}."),
-            "hi": ("कृपया उस जगह से तुरंत दूर हो जाइए और किसी को भी पास मत जाने दीजिए. "
-                   f"मैं यह इमरजेंसी शिकायत अभी दर्ज {hi_log}."),
-            "en": ("Please move well away from it right now and keep everyone back. "
-                   "I am logging this emergency immediately."),
+            "mr": ("काळजी करू नका, हे मी गांभीर्याने घेत आहे. कृपया कोणालाही OTP, पासवर्ड किंवा "
+                   f"बँक तपशील सांगू नका आणि अनोळखी लिंकवर क्लिक करू नका. मी ही तक्रार लगेच {mr_log}."),
+            "hi": (f"चिंता मत कीजिए, मैं इसे गंभीरता से {hi_taking}. कृपया किसी को भी OTP, पासवर्ड या "
+                   f"बैंक डिटेल मत बताइए और किसी अनजान लिंक पर क्लिक मत कीजिए. मैं यह शिकायत अभी दर्ज {hi_log}."),
+            "en": ("Don't worry — I'm taking this seriously. Please don't share any OTP, password "
+                   "or bank details with anyone, and don't click unknown links. I am logging this "
+                   "incident immediately."),
         },
         safety_shock={
-            "mr": ("आधी मेन स्विच बंद करा. त्या व्यक्तीला हाताने अजिबात स्पर्श करू नका — "
-                   f"फक्त कोरड्या लाकडी काठीने बाजूला करा. मी ही आपत्कालीन तक्रार लगेच {mr_log}."),
-            "hi": ("पहले मेन स्विच बंद कीजिए. उस व्यक्ति को हाथ से बिल्कुल मत छूइए — "
-                   f"सिर्फ सूखी लकड़ी की छड़ी से हटाइए. मैं यह इमरजेंसी शिकायत अभी दर्ज {hi_log}."),
-            "en": ("Switch off the main supply first. Do not touch the person with bare hands — "
-                   "move them only with a dry wooden stick. I am logging this emergency immediately."),
+            "mr": (f"काळजी करू नका. मी आधी हे सिम कार्ड तात्काळ ब्लॉक {mr_block} म्हणजे त्याचा गैरवापर होणार नाही, "
+                   f"आणि ही तक्रार लगेच {mr_log}."),
+            "hi": (f"चिंता मत कीजिए. सबसे पहले मैं यह सिम तुरंत ब्लॉक {hi_block} ताकि इसका गलत इस्तेमाल न हो, "
+                   f"और यह शिकायत अभी दर्ज {hi_log}."),
+            "en": ("Don't worry. First, I'm blocking that SIM right away so it can't be misused, "
+                   "and I am logging this incident immediately."),
         },
     )
 

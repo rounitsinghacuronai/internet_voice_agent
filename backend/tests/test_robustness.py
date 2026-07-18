@@ -36,19 +36,19 @@ def test_missing_language_confidence_does_not_drag_down_tier():
 
 
 def test_topic_stability_ignores_single_stray_background_word():
-    """Exact scenario from the spec: caller is mid-outage-report, a TV in the
+    """Exact scenario from the spec: caller is mid-fault-report, a TV in the
     background says something bill-related — must NOT switch topics."""
     topic = TopicStability()
-    topic.update("my electricity has been gone since morning")  # -> outage
-    assert topic.active == "outage"
+    topic.update("my internet not working since morning")  # -> internet
+    assert topic.active == "internet"
     topic.update("bill")  # single stray word, background noise
-    assert topic.active == "outage"  # unchanged
+    assert topic.active == "internet"  # unchanged
 
 
 def test_topic_stability_switches_after_consistent_new_topic():
     topic = TopicStability()
-    topic.update("light gaya hai kal se")
-    assert topic.active == "outage"
+    topic.update("net nahi chal raha hai kal se")
+    assert topic.active == "internet"
     topic.update("mera bill bahut zyada aaya hai")
     topic.update("bill ka payment nahi hua abhi tak")
     assert topic.active == "billing"
@@ -56,5 +56,5 @@ def test_topic_stability_switches_after_consistent_new_topic():
 
 def test_topic_directive_present_once_active():
     topic = TopicStability()
-    topic.update("current nahi aa raha hai")
-    assert "outage" in topic.directive()
+    topic.update("signal nahi aa raha hai")
+    assert "network" in topic.directive()

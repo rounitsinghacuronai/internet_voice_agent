@@ -1,11 +1,12 @@
 """Tool registry: OpenAI-style schemas + dispatch + HARD GATES.
 
-Gates are code, not prompt (lesson from run 192, where the model invented a complaint
+Gates are code, not prompt (lesson from run 192, where the model invented a ticket
 number after a failed verification):
-  • verify-gate : writes (register_complaint / name / load change) refuse unless
-                  verify_consumer succeeded within VERIFY_TTL_S — enforced HERE.
-  • otp-gate    : name/load changes additionally require verify_otp success.
-  • safety tools are NEVER gated.
+  • verify-gate : writes (register_complaint / plan change / SIM ops / ONT restart /
+                  engineer visit / escalate / close) refuse unless verify_customer
+                  succeeded within VERIFY_TTL_S — enforced HERE.
+  • otp-gate    : plan change and SIM swap/eSIM additionally require verify_otp success.
+  • priority (fraud/security) tools are NEVER gated.
 """
 from __future__ import annotations
 
@@ -18,33 +19,37 @@ from typing import Any, Callable
 from ..config import Settings
 from ..conversation.memory import CallMemory
 from ..conversation.numbers import EXPECTED_LENGTHS
-from .msedcl import MsedclServices
+from .telecom import TelecomServices
 
 log = logging.getLogger(__name__)
 
-_WRITE_TOOLS = {"register_complaint", "request_name_change", "request_load_change"}
-_OTP_TOOLS = {"request_name_change", "request_load_change"}
-_UNGATED = {"verify_consumer", "send_otp", "verify_otp", "get_new_connection_status",
-            "get_tariff_info", "track_complaint", "log_safety_incident",
-            "transfer_to_human", "search_knowledge", "end_call"}
+_WRITE_TOOLS = {"register_complaint", "request_plan_change", "request_sim_swap",
+                "block_sim", "restart_ont", "schedule_engineer_visit",
+                "escalate_complaint", "close_complaint"}
+_OTP_TOOLS = {"request_plan_change", "request_sim_swap"}
+_UNGATED = {"verify_customer", "send_otp", "verify_otp", "get_new_connection_status",
+            "get_plan_catalog", "get_network_status", "track_complaint",
+            "log_priority_incident", "transfer_to_human", "record_feedback",
+            "search_knowledge", "end_call"}
 
 # Number Recognition Engine hard gate: these tools take a number-type argument
 # that must be complete and well-formed before the backend is ever called.
-# Prevents the LLM from calling verify_consumer/send_otp/verify_otp with a
+# Prevents the LLM from calling verify_customer/send_otp/verify_otp with a
 # partial number fragment (e.g. mid-collection, or a garbled STT read) —
 # "Never trigger verification until the full number has been collected."
 _NUMBER_ARG_FIELDS: dict[str, dict[str, str]] = {
     # tool name → {arg name: number-type key in EXPECTED_LENGTHS}
-    "verify_consumer": {"consumer_no": "consumer_no", "mobile": "mobile"},
+    "verify_customer": {"account_no": "account_no", "mobile": "mobile"},
     "send_otp": {"mobile": "mobile"},
     "verify_otp": {"mobile": "mobile", "otp": "otp"},
+    "block_sim": {"mobile": "mobile"},
 }
 
 
 def _validate_number_args(name: str, args: dict) -> str | None:
     """Return an error message if a number-type argument is present but the
     wrong length (partial/garbled), else None. Absent args are fine — some
-    tools accept EITHER consumer_no OR mobile."""
+    tools accept EITHER account_no OR mobile."""
     fields = _NUMBER_ARG_FIELDS.get(name)
     if not fields:
         return None
@@ -72,48 +77,81 @@ def build_schemas() -> list[dict]:
     S = {"type": "string"}
     return [
         _fn("search_knowledge",
-            "Retrieve grounded MSEDCL policy/procedure/SOP/safety knowledge: billing rules, "
-            "discounts, complaint process, forms, escalation times, safety guidance, app/website "
-            "help. Use for HOW-things-work questions — never for a specific consumer's live data.",
+            "Retrieve grounded Syncbroad Networks policy/procedure/troubleshooting knowledge: plan "
+            "rules, recharge and billing policy, SIM/eSIM/MNP process, KYC, broadband and "
+            "Wi-Fi troubleshooting steps, roaming, enterprise services, app/website help. "
+            "Use for HOW-things-work questions — never for a specific customer's live data.",
             {"query": {**S, "description": "The caller's question, any language."},
-             "category": {**S, "description": "Optional filter: billing|safety|complaints|connections|general."}},
+             "category": {**S, "description": "Optional filter: mobile|broadband|billing|sim|network|account|enterprise|complaints|safety|general."}},
             ["query"]),
-        _fn("verify_consumer",
-            "Look up and verify the caller by 12-digit consumer number or registered mobile. "
-            "Call this the moment the caller provides either number.",
-            {"consumer_no": S, "mobile": S}),
-        _fn("send_otp", "Send OTP to the registered mobile. ONLY needed before a name change "
-            "or load change — never to read information.", {"mobile": S}, ["mobile"]),
-        _fn("verify_otp", "Verify the OTP the caller reads back.", {"mobile": S, "otp": S}, ["mobile", "otp"]),
-        _fn("get_bill", "Latest bill: month, units, amount, due date, whether previous bill was "
-            "average/estimated.", {"consumer_no": S}, ["consumer_no"]),
-        _fn("get_payment_status", "Status of a bill payment (success / pending / failed-but-debited).",
-            {"consumer_no": S, "txn_ref": S}, ["consumer_no"]),
+        _fn("verify_customer",
+            "Look up and verify the caller by 12-digit account number or registered 10-digit "
+            "mobile. Call this the moment the caller provides either number.",
+            {"account_no": S, "mobile": S}),
+        _fn("send_otp", "Send OTP to the registered mobile. ONLY needed before a plan change "
+            "or SIM swap/eSIM request — never to read information.", {"mobile": S}, ["mobile"]),
+        _fn("verify_otp", "Verify the OTP the caller reads back.", {"mobile": S, "otp": S},
+            ["mobile", "otp"]),
+        _fn("get_plan", "Current plan: name, price, validity/data quota. Requires verification.",
+            {"account_no": S}, ["account_no"]),
+        _fn("get_bill", "Latest postpaid/fiber bill: month, rent, add-ons, amount with GST, "
+            "due date, payment status, AutoPay.", {"account_no": S}, ["account_no"]),
+        _fn("get_payment_status", "Status of a payment (success / pending / failed-but-debited).",
+            {"account_no": S, "txn_ref": S}, ["account_no"]),
+        _fn("get_recharge_history", "Last prepaid recharges with dates, amounts and status.",
+            {"account_no": S}, ["account_no"]),
+        _fn("get_usage", "Live data usage: used today / remaining quota (mobile) or cycle "
+            "usage vs fair-use (fiber).", {"account_no": S}, ["account_no"]),
+        _fn("get_network_status", "Check for a known area outage (mobile tower or fiber cut) "
+            "by account number or area name, with restoration ETA. No verification needed.",
+            {"area": S, "account_no": S}),
+        _fn("get_broadband_status", "Live ONT/line status for a fiber account: LOS (red light) "
+            "or online, line up/down, last sync speed.", {"account_no": S}, ["account_no"]),
+        _fn("run_line_diagnostics", "Remote end-to-end diagnostics on a broadband line — "
+            "finds fiber faults vs Wi-Fi/router-side issues. Run BEFORE booking an engineer.",
+            {"account_no": S}, ["account_no"]),
+        _fn("restart_ont", "Remotely reboot the customer's ONT/router. Service returns in "
+            "two to three minutes. Useless for LOS (fiber break). Requires verification.",
+            {"account_no": S}, ["account_no"]),
         _fn("register_complaint",
-            "Register a complaint. YOU pick the exact category (e.g. 'Supply Failed - Phase out', "
-            "'Supply Failed - Total Area', 'High Bill', 'Meter Stuck up / Stop', 'Theft Related "
-            "Complaint') and YOU write the one-line description from what the caller said. "
-            "Requires prior successful verification.",
-            {"consumer_no": S, "category": S, "description": S},
-            ["consumer_no", "category", "description"]),
-        _fn("track_complaint", "Track an existing complaint by SR number.", {"complaint_no": S}, ["complaint_no"]),
-        _fn("get_outage", "Check for a known area outage (by consumer number or area name) with "
-            "restoration ETA.", {"area": S, "consumer_no": S}),
-        _fn("get_meter_details", "Meter status (OK/STUCK/BURNT), sanctioned load, last reading type.",
-            {"consumer_no": S}, ["consumer_no"]),
-        _fn("get_new_connection_status", "Stage of a new-connection application. No verification needed.",
-            {"application_no": S}, ["application_no"]),
-        _fn("request_load_change", "Submit load extension/reduction. Requires verification + OTP.",
-            {"consumer_no": S, "new_load": S}, ["consumer_no", "new_load"]),
-        _fn("request_name_change", "Submit change of name. Requires verification + OTP.",
-            {"consumer_no": S, "new_name": S}, ["consumer_no", "new_name"]),
-        _fn("get_tariff_info", "Live tariff structure notes for a consumer category. Never quote "
-            "per-unit rates from memory.", {"category": S}),
-        _fn("log_safety_incident", "Log an electrical safety emergency (wire down, shock, "
-            "transformer fire, pole collapse, sparking). Never gated.", {"type": S, "location": S},
-            ["type", "location"]),
-        _fn("transfer_to_human", "Transfer to a senior human executive with a one-line context summary.",
-            {"reason": S, "context_summary": S}, ["reason"]),
+            "Register a complaint/ticket. YOU pick the exact category (e.g. 'Broadband - No "
+            "Internet', 'Mobile - Call Drops', 'Recharge - Failed', 'Billing - High Bill', "
+            "'SIM - Lost / Block Request') and YOU write the one-line description from what "
+            "the caller said. Requires prior successful verification.",
+            {"account_no": S, "category": S, "description": S},
+            ["account_no", "category", "description"]),
+        _fn("track_complaint", "Track an existing ticket by its number.", {"complaint_no": S},
+            ["complaint_no"]),
+        _fn("escalate_complaint", "Escalate an open ticket to level two when the SLA is "
+            "breached or the caller is dissatisfied after a genuine attempt.",
+            {"complaint_no": S, "reason": S}, ["complaint_no"]),
+        _fn("close_complaint", "Close a ticket ONLY when the caller confirms on this call "
+            "that the issue is resolved.", {"complaint_no": S, "resolution_note": S},
+            ["complaint_no"]),
+        _fn("schedule_engineer_visit", "Book a field engineer visit (broadband faults that "
+            "remote diagnostics could not fix, installations, relocations). Requires "
+            "verification.", {"account_no": S, "preferred_slot": S}, ["account_no"]),
+        _fn("block_sim", "Immediately block a SIM (lost/stolen phone, fraud). Requires "
+            "verification but NEVER OTP — the caller may not have the SIM.",
+            {"mobile": S, "reason": S}, ["mobile"]),
+        _fn("request_plan_change", "Submit a plan upgrade/downgrade. Requires verification + OTP.",
+            {"account_no": S, "new_plan": S}, ["account_no", "new_plan"]),
+        _fn("request_sim_swap", "Request a physical SIM replacement or physical-to-eSIM "
+            "conversion. swap_type: replacement | esim. Requires verification + OTP.",
+            {"account_no": S, "swap_type": S}, ["account_no"]),
+        _fn("get_new_connection_status", "Stage of a new-connection application. No "
+            "verification needed.", {"application_no": S}, ["application_no"]),
+        _fn("get_plan_catalog", "Current plan catalog notes for a service type "
+            "(prepaid|postpaid|fiber|enterprise). Never quote pack prices from memory.",
+            {"service_type": S}),
+        _fn("log_priority_incident", "Log a fraud/security incident (SIM-swap fraud, OTP "
+            "scam, stolen device, unauthorised activity, threat/harassment calls). Never gated.",
+            {"type": S, "details": S}, ["type", "details"]),
+        _fn("transfer_to_human", "Transfer to a senior human executive with a one-line context "
+            "summary.", {"reason": S, "context_summary": S}, ["reason"]),
+        _fn("record_feedback", "Record the caller's satisfaction at the end of the call "
+            "(rating: satisfied|neutral|dissatisfied, optional comment).",
+            {"rating": S, "comment": S}, ["rating"]),
         _fn("end_call",
             "Disconnect the call. Call this IN THE SAME TURN as your spoken official "
             "closing line, when the caller has confirmed nothing else is needed, says "
@@ -125,17 +163,28 @@ def build_schemas() -> list[dict]:
 
 
 class ToolRegistry:
-    def __init__(self, settings: Settings, services: MsedclServices, retriever=None):
+    def __init__(self, settings: Settings, services: TelecomServices, retriever=None,
+                 on_event=None):
         self.s = settings
         self.svc = services
         self.retriever = retriever          # injected after RAG init
+        # Optional observer fired after EVERY tool dispatch:
+        #   on_event(tool_name, args, result, memory_snapshot, call_id)
+        # Wired to NotificationService.notify_event in main.py. MUST be a
+        # plain sync callable that returns instantly — it runs on the turn's
+        # hot path and is therefore guarded and never awaited.
+        self.on_event = on_event
         self.schemas = build_schemas()
         self._map: dict[str, Callable[..., Any]] = {
             n: getattr(services, n) for n in (
-                "verify_consumer", "send_otp", "verify_otp", "get_bill", "get_payment_status",
-                "register_complaint", "track_complaint", "get_outage", "get_meter_details",
-                "get_new_connection_status", "request_load_change", "request_name_change",
-                "get_tariff_info", "log_safety_incident", "transfer_to_human")
+                "verify_customer", "send_otp", "verify_otp", "get_plan", "get_bill",
+                "get_payment_status", "get_recharge_history", "get_usage",
+                "get_network_status", "get_broadband_status", "run_line_diagnostics",
+                "restart_ont", "register_complaint", "track_complaint",
+                "escalate_complaint", "close_complaint", "schedule_engineer_visit",
+                "block_sim", "request_plan_change", "request_sim_swap",
+                "get_new_connection_status", "get_plan_catalog",
+                "log_priority_incident", "transfer_to_human", "record_feedback")
         }
 
     async def dispatch(self, name: str, args: dict, memory: CallMemory) -> dict:
@@ -144,6 +193,12 @@ class ToolRegistry:
         latency = (time.perf_counter() - start) * 1000
         log.info("tool %s %.0fms → %s", name, latency, _short(result))
         memory.absorb_tool_result(name, args, result)
+        if self.on_event is not None:
+            try:                              # observer must never hurt the turn
+                self.on_event(name, args, result, memory.snapshot(),
+                              memory.session_id)
+            except Exception:
+                log.exception("tool on_event observer failed (ignored)")
         return result
 
     async def _dispatch_inner(self, name: str, args: dict, memory: CallMemory) -> dict:
@@ -170,15 +225,15 @@ class ToolRegistry:
         if name in _WRITE_TOOLS and name not in _UNGATED:
             if not memory.verify_fresh(self.s.verify_ttl_s):
                 return {"error": "verification_required",
-                        "message": "Refused: consumer identity not verified in this call. "
-                                   "Verify with verify_consumer first; never invent a result."}
+                        "message": "Refused: customer identity not verified in this call. "
+                                   "Verify with verify_customer first; never invent a result."}
             if name in _OTP_TOOLS and not memory.otp_verified:
                 return {"error": "otp_required",
                         "message": "Refused: this change needs OTP confirmation. "
                                    "Use send_otp then verify_otp first."}
-            # writes always use the VERIFIED consumer number, not whatever the model typed
-            if memory.consumer_no:
-                args["consumer_no"] = memory.consumer_no
+            # writes always use the VERIFIED account number, not whatever the model typed
+            if memory.account_no and "account_no" in args:
+                args["account_no"] = memory.account_no
 
         try:
             result = await asyncio.to_thread(fn, **_clean(args, fn))
@@ -190,9 +245,20 @@ class ToolRegistry:
         return result
 
 
+import inspect
+from functools import lru_cache
+
+
+@lru_cache(maxsize=64)
+def _param_names(fn: Callable) -> frozenset:
+    """Cached parameter-name set for a tool callable. Tool signatures are static
+    for the process lifetime, so reflecting once per function (instead of on
+    every dispatch) removes an inspect.signature() call from the turn hot path."""
+    return frozenset(inspect.signature(fn).parameters)
+
+
 def _clean(args: dict, fn: Callable) -> dict:
-    import inspect
-    params = inspect.signature(fn).parameters
+    params = _param_names(fn)
     return {k: v for k, v in args.items() if k in params and v is not None}
 
 

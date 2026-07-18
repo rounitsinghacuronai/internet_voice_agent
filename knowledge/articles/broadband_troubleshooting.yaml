@@ -1,0 +1,54 @@
+id: broadband_troubleshooting
+title: Broadband and fiber troubleshooting ladder
+category: broadband
+kind: decision_tree
+source: "Syncbroad Networks NOC Runbook 2026-07"
+version: "2026-07"
+language: en
+sections:
+  - title: Internet not working - fixed order
+    keywords: [internet not working, net band, नेट बंद, no internet, broadband down]
+    text: >
+      Fixed diagnostic order for a dead fiber connection: (1) payment status —
+      suspension for non-payment reactivates within 4 hours of payment; (2) area
+      outage — if a fiber cut or maintenance is logged, give the restoration ETA and
+      stop; (3) ONT status — red LOS light means no optical signal, a fiber break
+      between pole and premises; a reboot will NOT fix LOS; (4) remote diagnostics;
+      (5) remote ONT restart if the line is healthy; (6) engineer visit only when
+      remote steps fail. Never book an engineer while a remote step is untried.
+  - title: Red LOS light
+    keywords: [los, red light, लाल लाइट, fiber cut, optical]
+    text: >
+      A steady red LOS LED on the ONT means the optical path is broken. Causes:
+      area fiber cut (check outage first), bent/damaged patch cord at home, or a
+      break on the drop wire. If no area outage, an engineer visit is required;
+      SLA for "Broadband - Red LOS / Fiber Cut" is 8 hours.
+  - title: Slow speed diagnosis
+    keywords: [slow internet, speed kam, स्पीड कमी, धीमा, latency]
+    text: >
+      If diagnostics show the line syncing at full speed, the bottleneck is almost
+      always Wi-Fi: 2.4GHz congestion, router placement, or too many devices. Steps:
+      test on the 5GHz band, move the router away from walls/metal, or run a wired
+      speed test to isolate. If the wired test is also slow, register "Broadband -
+      Slow Speed" (24-hour SLA). Fair-use: past 3.3TB in a month, speed may reduce.
+  - title: Frequent disconnection
+    keywords: [disconnect, drop, बार बार कटता, वारंवार]
+    text: >
+      Frequent drops with a healthy optical signal usually mean a loose patch cord,
+      ONT overheating, or Wi-Fi interference. A remote ONT restart clears stuck
+      sessions. If drops persist within 24 hours of a restart, register
+      "Broadband - Frequent Disconnection" and consider an engineer visit.
+  - title: Router and Wi-Fi settings help
+    keywords: [router, ssid, password, वायफाय पासवर्ड, wifi name, mesh]
+    text: >
+      Wi-Fi name (SSID) and password can be changed from the Syncbroad Networks app or the
+      router admin page at 192.168.1.1 (default admin password printed on the ONT
+      label). Mesh units are supported on 300 Mbps+ plans — one free mesh node on
+      the 1 Gbps plan. Guest network and parental controls are available in the app.
+  - title: New connection and installation
+    keywords: [new connection, installation, नवीन कनेक्शन, फायबर लावा]
+    text: >
+      New fiber connections: feasibility check first, then installation within 48
+      hours in serviceable areas. Installation is free on annual plans; Rs 500
+      otherwise, adjusted in the first bill. Relocation (shifting) is free once a
+      year on plans 799 and above, scheduled like a new installation.
