@@ -117,6 +117,10 @@ class ConversationManager:
         # Set when the model calls end_call after the official closing — the
         # transport hangs up once the final audio has finished playing.
         self.end_call_requested = False
+        # True once the caller has been recognized from their registered mobile
+        # (caller-ID). Drives a standing "already verified — never re-ask"
+        # directive so a recognized caller is never sent through verification.
+        self._caller_recognized = False
         self.memory = CallMemory(session_id=session_id)
         self.lang = LanguageEngine()
         self.topic = TopicStability()
@@ -237,6 +241,7 @@ class ConversationManager:
         if not res.get("verified"):
             return None
         self.memory.absorb_tool_result("verify_customer", {}, res)
+        self._caller_recognized = True
         name = res.get("name") or ""
         return name.split()[0] if name else None
 
@@ -364,11 +369,26 @@ class ConversationManager:
         yield TurnChunk("done")
 
     # ── LLM turn with tool loop ──────────────────────────────────────────────
+    def _verified_caller_directive(self) -> str:
+        """Standing directive for a caller recognized from their registered mobile.
+        Kills the 'greeted by name but still asked to verify' behaviour: identity
+        is already established by caller ID, so verification must never be asked."""
+        if not (self._caller_recognized and self.memory.verified):
+            return ""
+        return (
+            "[CALLER ALREADY VERIFIED] This caller is phoning from their own "
+            "registered mobile, so their identity is CONFIRMED and their name, "
+            "account number and mobile are in CALL MEMORY. Do NOT ask them to "
+            "verify, and never ask for their account number or mobile — you "
+            "already have them. Go straight to solving their problem. (An OTP is "
+            "still required only for a plan change or a SIM swap.)"
+        )
+
     def _messages(self, knowledge_block: str = "") -> list[dict]:
         confidence_directive = self._last_confidence.directive() if self._last_confidence else ""
         directives = "\n\n".join(
             d for d in (confidence_directive, self.topic.directive(),
-                        self._mood_directive()) if d
+                        self._mood_directive(), self._verified_caller_directive()) if d
         )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
                                        knowledge_block, directives, persona=self.persona)
@@ -454,6 +474,13 @@ class ConversationManager:
                      self.turn_no, round_no,
                      ((t_first_token or now) - t_round) * 1000, (now - t_round) * 1000,
                      [c["function"]["name"] for c in tool_calls] or "none")
+            # Log what the agent actually SAID this round (truncated) so spoken
+            # output is visible in the server log for debugging — pairs with the
+            # "STT → …" line that already records what the caller said.
+            if spoken:
+                said = " ".join(spoken)
+                log.info("turn %d round %d SAID: %r%s", self.turn_no, round_no,
+                         said[:300], "…" if len(said) > 300 else "")
 
             if not tool_calls:
                 # Note: sentences already committed individually above; no bulk append needed.
