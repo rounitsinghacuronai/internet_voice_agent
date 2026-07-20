@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Empty = auto-select by AGENT_GENDER (male→advait, female→ritu, see persona.py).
     # Set explicitly to pin any Bulbul v3 speaker.
     tts_speaker: str = ""
-    tts_pace: float = 1.10            # global speaking rate ~1.10x; per-style pace multiplies this (clamped by speech_pace_max). Digit groups stay clear via each style's number_pace.
+    tts_pace: float = 1.0             # natural human speaking rate (matches the reference agent). Per-style pace multiplies this (clamped by speech_pace_max); >1.0 sounds fast/robotic.
     tts_sample_rate: int = 24000
     # ── OUTPUT loudness leveling ──────────────────────────────────────────────
     # Sarvam Bulbul returns each sentence at a slightly different loudness; sent

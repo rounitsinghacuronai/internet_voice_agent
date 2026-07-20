@@ -143,6 +143,24 @@ class SarvamSTTStream:
         """Cheap idempotent connect used at call start / language change."""
         await self._ensure_connected()
 
+    def reset_buffer(self) -> None:
+        """Discard everything buffered so far WITHOUT closing the socket.
+
+        Used at greeting-end: while the opening greeting plays, its echo is
+        captured by the mic. If that audio/transcript is left in the buffer, the
+        caller's FIRST finalize() has to wait behind 3-4 s of greeting echo —
+        the classic 2-3 s stall on the first turn. Clearing here means the first
+        real utterance finalizes clean and fast."""
+        self._parts.clear()
+        self._final_evt.clear()
+        self._early_flushed_at = 0.0
+        # Drop any locally-queued (not-yet-sent) audio frames from the greeting.
+        try:
+            while True:
+                self._q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+
     def early_flush(self) -> None:
         """LATENCY: called by ws_voice when the caller has been silent for
         ~stt_early_flush_silence_ms but BEFORE the endpointer's full hangover

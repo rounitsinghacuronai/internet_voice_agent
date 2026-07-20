@@ -129,7 +129,9 @@ def format_message(t: Ticket, group_footer: bool = True) -> str:
         t.category or t.event_type.replace("_", " ").title(),
     ]
     if t.location:
-        lines += ["", "📍 Location", t.location]
+        loc_label = "📍 Installation Address" \
+            if t.event_type == "new_connection_request" else "📍 Location"
+        lines += ["", loc_label, t.location]
     lines += [
         "",
         "⚠ Priority",

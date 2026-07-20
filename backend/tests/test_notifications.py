@@ -275,7 +275,8 @@ def test_new_connection_notifies_without_verification(tmp_path):
         _, msg = svc.sender.sent[0]
         assert "NEW CONNECTION REQUEST" in msg
         assert "Anita Kulkarni" in msg           # name from tool args, not memory
-        assert "Baner, Pune" in msg              # install address
+        assert "Installation Address" in msg     # address clearly labeled
+        assert "Baner, Pune" in msg              # install address (where to install)
         assert "9812312312" in msg               # contact number
         assert "9800011122" in msg               # caller-origin number
         assert "tomorrow 4-6 PM" in msg          # preferred slot in summary

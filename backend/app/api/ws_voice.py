@@ -283,7 +283,12 @@ class VoiceSession:
         # STREAMING STT: feed every frame to Sarvam as it arrives, so the
         # transcript is mostly done before the caller even stops speaking.
         # Non-blocking; any stream failure silently reverts to REST.
-        if self._stt_stream is not None and not self._stt_stream.disabled:
+        # EXCEPT during the opening greeting: barge-in is suppressed then, and the
+        # cold AEC lets the greeting echo into the mic — feeding it would leave
+        # 3-4 s of echo in the STT buffer and stall the caller's FIRST finalize
+        # (the 2-3 s first-turn lag). The buffer is cleared when the greeting ends.
+        if (self._stt_stream is not None and not self._stt_stream.disabled
+                and not self._greeting_active):
             self._stt_stream.feed(pcm16)
 
         peak = float(np.abs(np.frombuffer(pcm16, dtype=np.int16)).max() / 32768.0)
@@ -840,6 +845,14 @@ class VoiceSession:
             log.error("session %s: greeting TTS failed: %s", self.session_id, e)
         finally:
             self._greeting_active = False  # greeting over — barge-in resumes normally
+            # FIRST-TURN LATENCY: drop anything the mic captured during the
+            # greeting (its own echo) so the caller's first utterance finalizes
+            # clean, not behind seconds of buffered greeting audio. Also reset the
+            # endpointer, which may be mid-"speech" on that echo.
+            if self._stt_stream is not None and not self._stt_stream.disabled:
+                self._stt_stream.reset_buffer()
+            self.endpointer.reset()
+            self._early_flush_sent = False
             self.pipeline.notify_tts_ended()
 
     # ── silence / no-response watchdog ─────────────────────────────────────────
