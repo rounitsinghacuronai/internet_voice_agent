@@ -451,6 +451,27 @@ class TelecomServices:
         return {"transferred": True, "reason": reason,
                 "note": "Caller queued to a senior human executive with full context."}
 
+    def transfer_to_senior_executive(self, escalation_reason: str,
+                                     issue_category: str = "",
+                                     issue_priority: str = "MEDIUM") -> dict:
+        """Prepare a warm hand-off of the live call to a senior human executive.
+
+        The AI calls ONLY this tool; it NEVER performs the transfer itself. The
+        tool records the escalation and returns a 'prepared' result — the
+        VoiceSession then speaks the multilingual connecting message, forwards
+        the structured summary to the ops group, and triggers the Exotel leg
+        transfer (see telephony/transfer_service.py)."""
+        ref = f"ESC{uuid.uuid4().hex[:8].upper()}"
+        log.warning("SENIOR ESCALATION %s: reason=%s category=%s priority=%s",
+                    ref, escalation_reason, issue_category, issue_priority)
+        return {"escalation_prepared": True, "reference": ref,
+                "escalation_reason": escalation_reason,
+                "issue_category": issue_category,
+                "issue_priority": (issue_priority or "MEDIUM").upper(),
+                "note": "Handoff prepared. The system will now speak the connecting "
+                        "message and transfer the call to a senior executive. Say "
+                        "nothing further."}
+
     def record_feedback(self, rating: str, comment: str = "") -> dict:
         fid = f"FB{uuid.uuid4().hex[:8].upper()}"
         with self._conn() as c:

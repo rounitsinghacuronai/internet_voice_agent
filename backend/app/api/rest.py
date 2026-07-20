@@ -38,6 +38,22 @@ async def tickets(request: Request, q: str = "", limit: int = 100):
     return {"tickets": svc.store.search(q, min(limit, 500))}
 
 
+@router.api_route("/exotel/transfer-status", methods=["GET", "POST"])
+async def exotel_transfer_status(request: Request):
+    """Callback Exotel posts the outcome of a call transfer to (configure as
+    EXOTEL_TRANSFER_CALLBACK_URL). We log it for the ops trail; a real ACD/CRM
+    integration would update the ticket's assigned-executive + final status here.
+    Accepts form-encoded or query params (Exotel uses form posts)."""
+    data: dict = dict(request.query_params)
+    try:
+        form = await request.form()
+        data.update({k: v for k, v in form.items()})
+    except Exception:                                    # noqa: BLE001
+        pass
+    log.info("exotel transfer-status callback: %s", data or "<empty>")
+    return {"received": True}
+
+
 @router.get("/kb/search")
 async def kb_search(request: Request, q: str, category: str | None = None):
     return await request.app.state.deps.retriever.search(q, category)

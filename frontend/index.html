@@ -67,9 +67,48 @@ padding:11px 14px;font-size:14px;outline:none}
 #meterFill{height:100%;width:0%;background:linear-gradient(90deg,var(--ok),var(--accent));
 transition:width .08s}
 .hint{padding:10px 16px 14px;font-size:12px;color:var(--dim);line-height:1.5}
+/* ── AI → human escalation overlay ── */
+#xfer{position:fixed;inset:0;background:rgba(6,11,25,.82);backdrop-filter:blur(4px);
+display:none;align-items:center;justify-content:center;z-index:50}
+#xfer.show{display:flex}
+#xferCard{width:min(560px,92vw);background:var(--panel);border:1px solid #24324f;
+border-radius:16px;padding:26px 28px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+#xferCard h2{margin:0 0 4px;font-size:19px;color:var(--txt)}
+#xferCard .sub{color:var(--dim);font-size:13px;margin-bottom:18px}
+.xstep{display:flex;align-items:center;gap:12px;padding:7px 0;color:var(--dim);font-size:14px}
+.xstep .ic{width:22px;height:22px;border-radius:50%;border:2px solid #2c3b5c;flex:0 0 auto;
+display:flex;align-items:center;justify-content:center;font-size:12px}
+.xstep.active{color:var(--txt)}
+.xstep.active .ic{border-color:var(--accent);color:var(--accent)}
+.xstep.done{color:var(--ok)}
+.xstep.done .ic{border-color:var(--ok);background:var(--ok);color:#04210f}
+.xstep.fail{color:#ff6b6b}.xstep.fail .ic{border-color:#ff6b6b;color:#ff6b6b}
+#xferMeta{margin-top:18px;border-top:1px solid #24324f;padding-top:16px;
+display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+#xferMeta .k{color:var(--dim)}#xferMeta .v{color:var(--txt)}
+#xferMeta .pri{font-weight:700}
+#xferSummary{margin-top:14px;background:var(--panel2);border-radius:10px;padding:12px 14px;
+font-size:12.5px;color:var(--txt);white-space:pre-wrap;max-height:180px;overflow:auto;line-height:1.5}
 </style>
 </head>
 <body>
+<!-- AI → human escalation overlay -->
+<div id="xfer"><div id="xferCard">
+  <h2>Escalating to Senior Executive</h2>
+  <div class="sub">Handing your call to a human — with full context, so you won't repeat anything.</div>
+  <div class="xstep" data-step="escalating"><span class="ic">1</span><span>Escalating to Senior Executive…</span></div>
+  <div class="xstep" data-step="summarizing"><span class="ic">2</span><span>Generating Call Summary…</span></div>
+  <div class="xstep" data-step="preparing"><span class="ic">3</span><span>Preparing Transfer…</span></div>
+  <div class="xstep" data-step="connecting"><span class="ic">4</span><span>Connecting…</span></div>
+  <div class="xstep" data-step="completed"><span class="ic">✓</span><span>Transfer Completed</span></div>
+  <div id="xferMeta">
+    <span class="k">Transfer Reason</span><span class="v" id="xReason">—</span>
+    <span class="k">Issue Priority</span><span class="v pri" id="xPriority">—</span>
+    <span class="k">Complaint ID</span><span class="v" id="xComplaint">—</span>
+    <span class="k">Assigned Executive</span><span class="v" id="xExec">—</span>
+  </div>
+  <div id="xferSummary" style="display:none"></div>
+</div></div>
 <header>
   <div class="logo">T</div>
   <div><h1>Syncbroad Networks Customer Care</h1><div class="sub">Mobile · Broadband · Fiber — AI Voice Executive</div></div>
@@ -230,6 +269,30 @@ function updateMemory(m){
       `<div class="sr"><b>${c.ticket_no}</b><br>${c.category}${c.eta_hours?` · ~${c.eta_hours}h`:''}</div>`).join('');}}
 
 // ── call lifecycle ──
+const XFER_STEPS=['escalating','summarizing','preparing','connecting','completed'];
+function renderTransfer(m){
+  const ov=$('xfer');ov.classList.add('show');
+  if(m.reason)$('xReason').textContent=m.reason.replace(/_/g,' ');
+  if(m.priority){const p=$('xPriority');p.textContent=m.priority;
+    p.style.color=m.priority==='HIGH'?'#ff6b6b':(m.priority==='LOW'?'var(--dim)':'var(--accent)');}
+  if(m.complaint_id)$('xComplaint').textContent=m.complaint_id||'—';
+  if(m.executive)$('xExec').textContent=m.executive;
+  if(m.summary){const s=$('xferSummary');s.style.display='block';s.textContent=m.summary;}
+  const steps=document.querySelectorAll('.xstep');
+  if(m.stage==='failed'){
+    steps.forEach(el=>{if(el.dataset.step==='connecting'){el.classList.remove('active');el.classList.add('fail');
+      el.querySelector('span:last-child').textContent='Transfer could not complete — arranging a callback';}});
+    $('xExec').textContent='Callback will be arranged';return;}
+  const idx=XFER_STEPS.indexOf(m.stage);
+  steps.forEach(el=>{const i=XFER_STEPS.indexOf(el.dataset.step);
+    el.classList.remove('active','done');
+    if(i<idx)el.classList.add('done');else if(i===idx)el.classList.add(m.stage==='completed'?'done':'active');});
+}
+function hideTransfer(){$('xfer').classList.remove('show');
+  document.querySelectorAll('.xstep').forEach(el=>el.classList.remove('active','done','fail'));
+  ['xReason','xComplaint','xExec'].forEach(id=>$(id).textContent='—');
+  $('xPriority').textContent='—';const s=$('xferSummary');s.style.display='none';s.textContent='';}
+
 async function startCall(){
   $('callBtn').disabled=true;
   setStatus('connecting');
@@ -256,7 +319,8 @@ async function startCall(){
     else if(m.type==='assistant')addMsg('agent',m.text);
     else if(m.type==='state'){setStatus(m.value);if(m.value!=='speaking')closeAgentMsg();}
     else if(m.type==='interrupted'){flushPlayback();closeAgentMsg();setStatus('listening');}
-    else if(m.type==='memory')updateMemory(m);};
+    else if(m.type==='memory')updateMemory(m);
+    else if(m.type==='transfer')renderTransfer(m);};
   ws.onclose=endCall;ws.onerror=endCall;}
 
 function endCall(){if(!onCall&&!ws)return;onCall=false;
@@ -264,7 +328,7 @@ function endCall(){if(!onCall&&!ws)return;onCall=false;
   // Close the playback context so the next call starts fresh.
   if(playCtx){try{playCtx.close();}catch(e){}playCtx=null;playTime=0;}
   $('callBtn').textContent='📞 Start Call';$('callBtn').className='';$('callBtn').disabled=false;
-  $('textInput').disabled=true;setStatus('idle');closeAgentMsg();}
+  $('textInput').disabled=true;setStatus('idle');closeAgentMsg();hideTransfer();}
 
 $('callBtn').onclick=()=>onCall?endCall():startCall();
 $('textInput').addEventListener('keydown',e=>{

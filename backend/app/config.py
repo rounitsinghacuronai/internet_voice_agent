@@ -178,6 +178,29 @@ class Settings(BaseSettings):
     exotel_api_key: str = ""
     exotel_api_token: str = ""
 
+    # ── AI → human escalation / call transfer ────────────────────────────────
+    # When the AI decides a call needs a senior executive it calls the
+    # transfer_to_senior_executive tool; the actual leg transfer is done by
+    # backend/app/telephony/transfer_service.py. Everything below is optional:
+    # with credentials absent the service runs in SIMULATION mode (full flow,
+    # summary, WhatsApp handoff and UI stages all work — only the real Exotel
+    # dial is skipped), so nothing is hardcoded and it is safe to ship now.
+    transfer_enabled: bool = True             # master switch for the escalation feature
+    exotel_transfer_enabled: bool = False     # perform the REAL Exotel dial (needs creds below)
+    exotel_sid: str = ""                      # Exotel account SID (subdomain)
+    exotel_subdomain: str = "api.exotel.com"  # api.exotel.com | api.in.exotel.com …
+    exotel_transfer_number: str = ""          # executive / hunt-group number to dial
+    exotel_caller_id: str = ""                # your ExoPhone (CallerId) for the transfer leg
+    exotel_transfer_callback_url: str = ""    # Exotel posts transfer status here (optional)
+    transfer_retry_max: int = 2               # transfer attempts before offering a callback
+    transfer_retry_base_s: float = 1.5
+    # Human-readable executive/queue label shown to the caller & ops (placeholder
+    # until a real routing/ACD integration supplies the assigned agent name).
+    transfer_executive_label: str = "Senior Executive"
+    # Escalate to a human after this many failed troubleshooting attempts on the
+    # same unresolved issue (the decision engine's failed-attempts trigger).
+    escalation_failed_attempts: int = 3
+
     # ── Human Speech Generation Engine + Voice Director ──
     # Deterministic layer that turns raw LLM text into natural spoken dialogue
     # (thought-groups, pauses, pacing, number pronunciation, de-AI cleanup)

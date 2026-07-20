@@ -727,6 +727,13 @@ class VoiceSession:
                     await self.ws.close()
                     return
 
+                # ── agent-initiated escalation to a senior executive ──
+                if getattr(self.manager, "transfer_requested", None) is not None:
+                    ctx = self.manager.transfer_requested
+                    self.manager.transfer_requested = None
+                    await self._handle_transfer(ctx)
+                    return
+
                 # Clean completion
                 self.sm.transition(CallState.WAITING_FOR_USER, "turn_done")
                 await self._send({"type": "memory", **self.manager.memory.snapshot()})
@@ -854,6 +861,90 @@ class VoiceSession:
             self.endpointer.reset()
             self._early_flush_sent = False
             self.pipeline.notify_tts_ended()
+
+    # ── AI → human escalation / call transfer ─────────────────────────────────
+
+    async def _handle_transfer(self, ctx) -> None:
+        """Seamless hand-off to a senior executive. Speaks the warm multilingual
+        connecting message, streams the UI stages, then performs the actual leg
+        transfer via the isolated TransferService. On failure the caller is
+        apologised to and offered a callback — never left in silence.
+
+        The summary was already built when the tool fired (no blocking work here),
+        so the only added latency is the spoken connecting line the caller hears
+        anyway. Streaming stays uninterrupted right up to the transfer."""
+        t0 = time.monotonic()
+        log.info("session %s: TRANSFER REQUESTED — reason=%s category=%s priority=%s",
+                 self.session_id, ctx.escalation_reason, ctx.issue_category,
+                 ctx.issue_priority)
+
+        # UI stages: escalating → summarizing → preparing
+        await self._send({"type": "transfer", "stage": "escalating",
+                          "reason": ctx.escalation_reason,
+                          "category": ctx.issue_category,
+                          "priority": ctx.issue_priority,
+                          "complaint_id": ctx.complaint_id})
+        await self._send({"type": "transfer", "stage": "summarizing",
+                          "summary": ctx.summary})
+
+        # Speak the warm connecting line (guaranteed multilingual, caller's lang).
+        await self._send({"type": "transfer", "stage": "preparing",
+                          "executive": self.s.transfer_executive_label})
+        self.pipeline.notify_tts_started()
+        try:
+            await self._speak_sentence(self.manager.transfer_intro_line())
+            await self._drain_playback("transfer")
+        except Exception as e:                       # noqa: BLE001
+            log.warning("session %s: transfer intro TTS failed: %s", self.session_id, e)
+        finally:
+            self.pipeline.notify_tts_ended()
+
+        # Perform the real transfer (Exotel; simulation when creds/CallSid absent).
+        await self._send({"type": "transfer", "stage": "connecting"})
+        ctx.call_sid = getattr(self.ws, "call_sid", None)
+        ctx.from_number = getattr(self.ws, "from_number", None) or ctx.caller_number
+        transfer = getattr(self.deps, "transfer", None)
+        try:
+            result = await transfer.transfer(ctx) if transfer is not None else None
+        except Exception as e:                       # noqa: BLE001
+            log.exception("session %s: transfer service error", self.session_id)
+            result = None
+
+        if result is not None and result.ok:
+            log.info("session %s: TRANSFER %s in %.0fms (exec=%s ref=%s)",
+                     self.session_id, result.status.value,
+                     (time.monotonic() - t0) * 1000, result.executive,
+                     result.reference)
+            await self._send({"type": "transfer", "stage": "completed",
+                              "executive": result.executive,
+                              "reference": result.reference,
+                              "reason": ctx.escalation_reason,
+                              "category": ctx.issue_category,
+                              "priority": ctx.issue_priority,
+                              "complaint_id": ctx.complaint_id,
+                              "summary": ctx.summary})
+            self.sm.transition(CallState.WAITING_FOR_USER, "transferred")
+            await self._send({"type": "call_end"})
+            await self.ws.close()
+            return
+
+        # ── failure: apologise + offer callback, keep the caller on the line ──
+        err = (result.error if result is not None else "transfer backend unavailable")
+        log.error("session %s: TRANSFER FAILED — %s", self.session_id, err)
+        await self._send({"type": "transfer", "stage": "failed", "error": err})
+        self.pipeline.notify_tts_started()
+        try:
+            for chunk in self.manager.transfer_failed_lines():
+                await self._speak_sentence(chunk)
+            await self._drain_playback("transfer_failed")
+        except Exception as e:                       # noqa: BLE001
+            log.warning("session %s: transfer-failed TTS error: %s", self.session_id, e)
+        finally:
+            self.pipeline.notify_tts_ended()
+        # Return the caller to normal conversation (they were NOT dropped).
+        self.sm.transition(CallState.WAITING_FOR_USER, "transfer_failed")
+        await self._send({"type": "state", "value": "listening"})
+        self.sm.transition(CallState.LISTENING, "after_transfer_failed")
 
     # ── silence / no-response watchdog ─────────────────────────────────────────
 

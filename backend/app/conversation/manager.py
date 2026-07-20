@@ -49,6 +49,9 @@ from typing import AsyncIterator
 from ..config import Settings
 from ..persona import get_persona
 from ..prompts.loader import compose_system_prompt
+from .escalation import (EscalationDecision, EscalationEngine,
+                         build_escalation_summary)
+from ..telephony.transfer_service import TransferContext
 from ..providers.base import LLMProvider, ProviderError
 from ..speech.director import detect_caller_emotion
 from ..speech.pipeline import SpeechDirector
@@ -79,6 +82,14 @@ _PAUSE_SPLIT = re.compile(r"(?<=[,،—])\s+")
 # sentence lets the voice carry natural intonation and emotion across it. Only a
 # genuinely long run-on sentence now splits early, and only for first-audio latency.
 _FORCE_FLUSH_CHARS = 160
+
+# Tools that represent a troubleshooting attempt — each successful call that
+# leaves the issue unresolved bumps the decision engine's failed-attempts count.
+_TROUBLESHOOT_TOOLS = {
+    "get_network_status", "get_broadband_status", "run_line_diagnostics",
+    "restart_ont", "get_bill", "get_payment_status", "get_usage",
+    "get_recharge_history",
+}
 
 # NOTE: all identity-bearing fixed lines (greeting, silence nudge, closings,
 # safety, emergency follow-ups) live in backend/app/persona.py — the single
@@ -132,6 +143,18 @@ class ConversationManager:
         # decays, and clears immediately on gratitude/relief.
         self._caller_emotion: str | None = None
         self._emotion_set_turn: int = 0
+
+        # ── AI → human escalation ──
+        # Decision engine (intent/sentiment/severity/failed-attempts/request/tool).
+        self._escalation = EscalationEngine(settings)
+        self._escalation_decision: EscalationDecision = EscalationDecision()
+        # Set to a TransferContext when transfer_to_senior_executive fires — the
+        # VoiceSession reads it after the turn's audio drains and performs the
+        # actual leg transfer (mirrors end_call_requested).
+        self.transfer_requested: TransferContext | None = None
+        self._tools_used: list[str] = []          # every tool called this call
+        self._failed_attempts: int = 0            # troubleshooting tries, unresolved
+        self._last_tool_results: list[dict] = []  # previous turn's tool results
 
         # Human Speech Generation Engine + Voice Director. One instance per call
         # (holds the anti-repetition VariationTracker). None → raw sentence → TTS.
@@ -265,6 +288,25 @@ class ConversationManager:
         self.memory.history.append({"role": "assistant", "content": text})
         return self._voice_fixed(text, lang, StyleName.CLOSING)
 
+    # ── escalation: fixed multilingual spoken lines (called by VoiceSession) ──
+    def transfer_intro_line(self) -> TurnChunk:
+        """Warm hand-off + connecting message, in the caller's current language."""
+        lang = _lang_for(self.memory.language, self.persona.transfer_intro)
+        text = self.persona.transfer_intro[lang]
+        self.memory.history.append({"role": "assistant", "content": text})
+        return self._voice_fixed(text, lang, StyleName.CLOSING)
+
+    def transfer_failed_lines(self) -> list[TurnChunk]:
+        """Spoken when the transfer could not complete: apologise + offer a
+        callback, so the caller is never left in silence."""
+        lang = _lang_for(self.memory.language, self.persona.transfer_failed)
+        chunks: list[TurnChunk] = []
+        for d in (self.persona.transfer_failed, self.persona.transfer_callback):
+            text = d[lang]
+            self.memory.history.append({"role": "assistant", "content": text})
+            chunks.append(self._voice_fixed(text, lang, StyleName.DEFAULT))
+        return chunks
+
     async def run_turn(
         self,
         user_text: str,
@@ -279,6 +321,20 @@ class ConversationManager:
             return
         self._last_user_text = user_text
         self._update_caller_emotion(user_text)
+
+        # DECISION ENGINE: weigh intent/sentiment/severity/failed-attempts/request
+        # /tool-response and, when a human is warranted, inject a directive so the
+        # LLM reliably calls transfer_to_senior_executive this turn.
+        if getattr(self.s, "transfer_enabled", True):
+            self._escalation_decision = self._escalation.evaluate(
+                user_text, self.memory, mood=self._caller_emotion,
+                failed_attempts=self._failed_attempts,
+                last_tool_results=self._last_tool_results)
+            if self._escalation_decision.should_transfer:
+                log.info("turn %d: escalation recommended — %s (%s, %s)",
+                         self.turn_no, self._escalation_decision.reason,
+                         self._escalation_decision.source,
+                         self._escalation_decision.priority)
 
         self.memory.scan_user_text(user_text)
         # Disarm number collection once its slot is filled (by ANY path — the
@@ -346,6 +402,45 @@ class ConversationManager:
             self.memory.start_number_collection(field_name)
             log.info("turn %d: armed number collection for '%s'", self.turn_no, field_name)
 
+    # ── escalation: build the transfer context on tool call ──────────────────
+    def _prepare_transfer(self, args: dict, result: dict) -> None:
+        """Assemble the TransferContext when transfer_to_senior_executive fires.
+        The VoiceSession reads self.transfer_requested after the turn's audio
+        drains and performs the actual leg transfer. Identity + summary come from
+        call memory / the decision engine, never from the model."""
+        decision = self._escalation_decision
+        reason = args.get("escalation_reason") or decision.reason or "requested"
+        category = (args.get("issue_category") or decision.category
+                    or result.get("issue_category") or "")
+        priority = (args.get("issue_priority") or result.get("issue_priority")
+                    or decision.priority or "MEDIUM").upper()
+        # Reuse the engine's decision object so the summary reflects the same
+        # category/priority/reason the caller was escalated under.
+        summary_decision = EscalationDecision(
+            True, reason, category, priority, decision.source or "tool")
+        summary = build_escalation_summary(
+            self.memory, self._tools_used, summary_decision, self._last_user_text)
+        verified = "verified" if self.memory.verified else "not_verified"
+        complaint_id = (self.memory.complaints[-1].ticket_no
+                        if self.memory.complaints else "")
+        self.transfer_requested = TransferContext(
+            escalation_reason=reason,
+            issue_category=category,
+            issue_priority=priority,
+            summary=summary,
+            customer_name=self.memory.name or "",
+            customer_id=self.memory.account_no or "",
+            mobile=self.memory.mobile or "",
+            caller_number=getattr(self.memory, "caller_number", "") or "",
+            language=self.memory.language,
+            complaint_id=complaint_id,
+            verification_status=verified,
+            troubleshooting_done=summary,       # full summary carries the trace
+            session_id=self.memory.session_id,
+        )
+        log.warning("turn %d: TRANSFER prepared — reason=%s category=%s priority=%s ref=%s",
+                    self.turn_no, reason, category, priority, result.get("reference"))
+
     # ── emergency path ───────────────────────────────────────────────────────
     async def _emergency(self, verdict: safety.SafetyVerdict, user_text: str) -> AsyncIterator[TurnChunk]:
         lang = self.memory.language if self.memory.language in ("mr", "hi", "en") else "mr"
@@ -388,7 +483,8 @@ class ConversationManager:
         confidence_directive = self._last_confidence.directive() if self._last_confidence else ""
         directives = "\n\n".join(
             d for d in (confidence_directive, self.topic.directive(),
-                        self._mood_directive(), self._verified_caller_directive()) if d
+                        self._mood_directive(), self._verified_caller_directive(),
+                        self._escalation_decision.directive()) if d
         )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
                                        knowledge_block, directives, persona=self.persona)
@@ -408,6 +504,9 @@ class ConversationManager:
         self._turn_is_first = True
         self._turn_processed = False
         self._turn_complaints_before = len(self.memory.complaints)
+        # The escalation engine (run in run_turn, before this) has already read
+        # last turn's tool results — start this turn's collection fresh.
+        self._last_tool_results = []
 
         for round_no in range(self.s.max_tool_rounds + 1):
             messages = self._messages(knowledge_block) + scratch
@@ -549,6 +648,20 @@ class ConversationManager:
 
                 if name == "search_knowledge" and isinstance(result, dict):
                     knowledge_block = result.get("context", "") or knowledge_block
+
+                # ── escalation bookkeeping ──
+                self._tools_used.append(name)
+                self._last_tool_results.append(result if isinstance(result, dict) else {})
+                if name in _TROUBLESHOOT_TOOLS and isinstance(result, dict) \
+                        and not result.get("error"):
+                    self._failed_attempts += 1     # a troubleshooting attempt was made
+                if name == "register_complaint" and isinstance(result, dict) \
+                        and result.get("ticket_no"):
+                    self._failed_attempts = 0       # logged → fresh slate
+                if name == "transfer_to_senior_executive" and isinstance(result, dict) \
+                        and result.get("escalation_prepared"):
+                    self._prepare_transfer(args, result)
+
                 scratch.append({
                     "role": "tool",
                     "tool_call_id": call["id"],

@@ -30,7 +30,8 @@ _OTP_TOOLS = {"request_plan_change", "request_sim_swap"}
 _UNGATED = {"verify_customer", "send_otp", "verify_otp", "get_new_connection_status",
             "register_new_connection", "get_plan_catalog", "get_network_status",
             "track_complaint", "log_priority_incident", "transfer_to_human",
-            "record_feedback", "search_knowledge", "end_call"}
+            "transfer_to_senior_executive", "record_feedback", "search_knowledge",
+            "end_call"}
 
 # Number Recognition Engine hard gate: these tools take a number-type argument
 # that must be complete and well-formed before the backend is ever called.
@@ -160,6 +161,22 @@ def build_schemas() -> list[dict]:
             {"type": S, "details": S}, ["type", "details"]),
         _fn("transfer_to_human", "Transfer to a senior human executive with a one-line context "
             "summary.", {"reason": S, "context_summary": S}, ["reason"]),
+        _fn("transfer_to_senior_executive",
+            "Hand this call to a SENIOR HUMAN EXECUTIVE. Call this ONLY when the "
+            "issue genuinely needs a human: an explicit request for a human; "
+            "enterprise/business/corporate connection; fraud or SIM misuse; SIM "
+            "ownership transfer or number dispute; legal complaint; fire/pole/"
+            "distribution-box damage or a major multi-customer outage; a billing "
+            "dispute needing manual review; a VIP customer; a backend tool that "
+            "asks for manual intervention; or the customer still unresolved/"
+            "dissatisfied after genuine troubleshooting. NEVER for routine issues "
+            "(recharge, balance, plan info, ticket status, password/APN, router "
+            "restart, or before troubleshooting a simple fault). You call ONLY "
+            "this tool; the system speaks the warm connecting message, prepares "
+            "the summary and performs the transfer. After calling it, say nothing "
+            "further. issue_priority is HIGH|MEDIUM|LOW.",
+            {"escalation_reason": S, "issue_category": S, "issue_priority": S},
+            ["escalation_reason"]),
         _fn("record_feedback", "Record the caller's satisfaction at the end of the call "
             "(rating: satisfied|neutral|dissatisfied, optional comment).",
             {"rating": S, "comment": S}, ["rating"]),
@@ -196,7 +213,8 @@ class ToolRegistry:
                 "block_sim", "request_plan_change", "request_sim_swap",
                 "register_new_connection", "get_new_connection_status",
                 "get_plan_catalog",
-                "log_priority_incident", "transfer_to_human", "record_feedback")
+                "log_priority_incident", "transfer_to_human",
+                "transfer_to_senior_executive", "record_feedback")
         }
 
     async def dispatch(self, name: str, args: dict, memory: CallMemory) -> dict:

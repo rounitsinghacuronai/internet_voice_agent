@@ -41,6 +41,8 @@ class Deps:
     retriever: HybridRetriever
     http: httpx.AsyncClient
     notifications: object | None = None
+    # AI → human call-transfer backend (Exotel; simulation when creds absent).
+    transfer: object | None = None
     # Shared, loaded-once Silero VAD ONNX session — every VoiceSession reuses
     # this instead of each call reloading the model from scratch (see
     # audio/vad.py). None if onnxruntime/model unavailable (energy-gate
@@ -82,6 +84,11 @@ async def lifespan(app: FastAPI):
     # — see audio/vad.py). ~1-2s one-time cost at boot, zero per-call cost after.
     vad_session = load_vad_session()
 
+    # AI → human escalation: isolated, configurable transfer backend. Shares the
+    # HTTP client; runs in simulation when Exotel transfer creds are absent.
+    from .telephony.transfer_service import TransferService
+    transfer = TransferService(settings, client=http)
+
     app.state.deps = Deps(
         settings=settings,
         stt=SarvamSTT(settings, http),
@@ -92,6 +99,7 @@ async def lifespan(app: FastAPI):
         http=http,
         vad_session=vad_session,
         notifications=notifications,
+        transfer=transfer,
     )
     try:
         await retriever.build()

@@ -27,6 +27,7 @@ _LOW = {
 _EVENT_PRIORITY = {
     "priority_incident": "HIGH",       # fraud / stolen / harassment fast-path
     "human_escalation": "HIGH",
+    "senior_escalation": "HIGH",       # AI → senior executive hand-off
     "ticket_escalated": "HIGH",
     "sim_blocked": "HIGH",
 }
@@ -84,6 +85,7 @@ _EVENT_TITLE = {
     "esim_request": "eSIM / SIM SWAP REQUEST",
     "priority_incident": "PRIORITY INCIDENT",
     "human_escalation": "HUMAN ESCALATION",
+    "senior_escalation": "SENIOR EXECUTIVE ESCALATION",
     "new_connection_request": "NEW CONNECTION REQUEST",
 }
 
@@ -194,7 +196,7 @@ def build_summary(event_type: str, args: dict, result: dict, memory: dict,
         return " ".join(" ".join(nc).split()[:150])
 
     desc = (args.get("description") or args.get("reason")
-            or args.get("details") or "").strip()
+            or args.get("details") or args.get("escalation_reason") or "").strip()
     if desc:
         # cap the free-text issue description so the status/action lines below
         # always survive the 150-word budget

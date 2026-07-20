@@ -37,6 +37,7 @@ _TOOL_EVENTS = {
     "request_sim_swap": "esim_request",
     "log_priority_incident": "priority_incident",
     "transfer_to_human": "human_escalation",
+    "transfer_to_senior_executive": "senior_escalation",
     "register_new_connection": "new_connection_request",
 }
 
@@ -49,6 +50,7 @@ _SUCCESS_KEYS = {
     "esim_request": "submitted",
     "priority_incident": "logged",
     "human_escalation": "transferred",
+    "senior_escalation": "escalation_prepared",
     "new_connection_request": "registered",
 }
 
@@ -146,6 +148,9 @@ class NotificationService:
                         "human_escalation": f"Escalation - {args.get('reason', 'requested')}",
                         "engineer_visit": "Engineer Visit Required",
                         "new_connection_request": "New Connection - Request",
+                        "senior_escalation": "Escalation - "
+                            + (args.get("issue_category")
+                               or args.get("escalation_reason", "requested")),
                         }.get(event_type, event_type))
 
         # New-connection callers are prospects — not in the subscriber DB — so the

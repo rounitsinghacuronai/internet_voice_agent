@@ -105,6 +105,10 @@ class PersonaContext:
     emergency_follow: dict = field(default_factory=dict)
     safety_generic: dict = field(default_factory=dict)
     safety_shock: dict = field(default_factory=dict)
+    # ── AI → human escalation (spoken in the caller's current language) ──
+    transfer_intro: dict = field(default_factory=dict)      # warm hand-off + connecting
+    transfer_failed: dict = field(default_factory=dict)     # transfer could not complete
+    transfer_callback: dict = field(default_factory=dict)   # offer a callback instead
 
     # ── recognized-caller opener ─────────────────────────────────────────────
     def personal_greeting(self, first_name: str) -> str:
@@ -235,6 +239,33 @@ def _build(name: str, gender: str, role: str, voice: str) -> PersonaContext:
                    f"और यह शिकायत अभी दर्ज {hi_log}."),
             "en": ("Don't worry. First, I'm blocking that SIM right away so it can't be misused, "
                    "and I am logging this incident immediately."),
+        },
+        transfer_intro={
+            "mr": ("आपल्या संयमाबद्दल धन्यवाद. सुरुवातीची पडताळणी मी पूर्ण केली आहे. "
+                   "या बाबतीत आपल्याला आमच्या वरिष्ठ अधिकाऱ्याची मदत लागेल. आपली संपूर्ण "
+                   "माहिती आणि तपशील मी आधीच तयार करून ठेवला आहे, त्यामुळे तुम्हाला पुन्हा "
+                   "काही सांगावं लागणार नाही. मी आपला कॉल आता जोडत आहे."),
+            "hi": ("आपके धैर्य के लिए धन्यवाद. शुरुआती जाँच मैंने पूरी कर ली है. इस मामले में "
+                   "आपको हमारे सीनियर अधिकारी की सहायता चाहिए होगी. आपकी पूरी जानकारी और "
+                   "ब्यौरा मैंने पहले ही तैयार कर लिया है, इसलिए आपको दोबारा कुछ बताने की "
+                   "ज़रूरत नहीं पड़ेगी. मैं आपका कॉल अभी जोड़ रहा हूँ."),
+            "en": ("Thank you for your patience. I've completed the initial verification. "
+                   "This issue needs help from one of our senior executives. I've already "
+                   "prepared a full summary of your case, so you won't have to explain "
+                   "everything again. I'm connecting your call now."),
+        },
+        transfer_failed={
+            "mr": ("क्षमस्व, तांत्रिक अडचणीमुळे मी आत्ता कॉल जोडू शकलो नाही."),
+            "hi": ("क्षमा कीजिए, तकनीकी दिक्कत के कारण मैं अभी कॉल नहीं जोड़ पाया."),
+            "en": ("I'm sorry — a technical issue meant I couldn't connect the call right now."),
+        },
+        transfer_callback={
+            "mr": ("काळजी करू नका, आपली संपूर्ण माहिती नोंदवली आहे आणि आमचे वरिष्ठ अधिकारी "
+                   "आपल्याला याच नंबरवर लवकरच परत कॉल करतील."),
+            "hi": ("चिंता मत कीजिए, आपकी पूरी जानकारी दर्ज कर ली है और हमारे सीनियर अधिकारी "
+                   "आपको इसी नंबर पर जल्द ही कॉल बैक करेंगे."),
+            "en": ("Don't worry — I've saved your full details and our senior executive will "
+                   "call you back on this number shortly."),
         },
     )
 
