@@ -9,7 +9,8 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from .numbers import NumberBuffer, is_correction, normalize_digit_words
+from .numbers import (NumberBuffer, is_correction, normalize_digit_words,
+                      wants_remove_last, wants_restart)
 
 # Keyword triggers per field, checked against the AGENT's last utterance
 # (native script + romanized), used to decide what to start buffering when
@@ -62,6 +63,8 @@ class CallMemory:
     # Number Recognition Engine: cross-utterance buffer for a number currently
     # being collected (account_no/mobile/otp spoken in fragments).
     number_buffer: NumberBuffer = field(default_factory=NumberBuffer)
+    # DTMF (keypad) controller — lazily bound to number_buffer on first keypress.
+    _dtmf: object = field(default=None, repr=False, compare=False)
 
     # ── deterministic slot extraction ────────────────────────────────────────
     # digit-boundary lookarounds (not \b — Devanagari letters are word chars)
@@ -85,35 +88,88 @@ class CallMemory:
     # ── Number Recognition Engine: cross-utterance collection ───────────────
 
     def field_requested_by(self, assistant_text: str) -> str | None:
-        """Which number-type field (if any) the agent's last line was asking for."""
+        """Which number-type field (if any) the agent's last line was asking for.
+
+        When the agent offers a CHOICE ("account number or mobile number"),
+        prefer mobile: callers almost always read out their 10-digit mobile, and
+        a 12-digit account spoken in one breath is still caught by scan_user_text.
+        Arming the 12-digit account buffer for a 10-digit mobile made it keep
+        asking for two more digits that never came."""
         low = assistant_text.lower()
-        for slot, phrases in _FIELD_PROMPTS.items():
-            if any(p in low for p in phrases):
-                return slot
-        return None
+        matches = [slot for slot, phrases in _FIELD_PROMPTS.items()
+                   if any(p in low for p in phrases)]
+        if not matches:
+            return None
+        if "mobile" in matches and "account_no" in matches:
+            return "mobile"
+        return matches[0]
 
     def start_number_collection(self, field_name: str) -> None:
         if not self.number_buffer.active or self.number_buffer.field != field_name:
             self.number_buffer.start(field_name)
 
-    def feed_number_fragment(self, text: str) -> tuple[str, bool]:
+    def feed_number_fragment(self, text: str,
+                             confidence: float = 1.0) -> tuple[str, bool]:
         """Feed one utterance into the active number buffer.
 
-        Returns (accumulated_digits, is_complete). When complete, the
-        relevant slot (account_no/mobile/otp) is written directly
-        and the buffer clears itself, ready for the next collection.
+        Returns (accumulated_digits, is_complete). Handles corrections, explicit
+        edits ('remove the last digit'), and restarts ('forget that, start
+        again') the way a human executive would — never losing prior digits
+        except on an explicit restart. When an EXACT-length identifier completes,
+        the matching slot (account_no/mobile) is written and the buffer clears.
         """
-        if is_correction(text) and self.number_buffer.digits:
-            digits = self.number_buffer.correct_last(text)
-            complete = len(digits) == (self.number_buffer.expected_len or -1)
+        nb = self.number_buffer
+        # Explicit restart: caller abandons the number and starts fresh.
+        if wants_restart(text):
+            field_name = nb.field
+            nb.clear()
+            if field_name:
+                nb.start(field_name)
+            return "", False
+        # Explicit "remove the last digit".
+        if wants_remove_last(text) and nb.digits:
+            digits = nb.remove_last()
+            return digits, False
+        # Single-digit / tail correction ("sorry, last digit is 2").
+        if is_correction(text) and nb.digits:
+            digits = nb.correct_last(text)
+            complete = len(digits) == (nb.expected_len or -1)
         else:
-            digits, complete = self.number_buffer.feed(text)
+            digits, complete = nb.feed(text, confidence)
         if complete:
-            field_name = self.number_buffer.field
+            field_name = nb.field
             if field_name in ("account_no", "mobile"):
                 setattr(self, field_name, digits)
-            self.number_buffer.clear()
+            nb.clear()
         return digits, complete
+
+    def feed_dtmf_digit(self, key: str, submit_key: str = "#",
+                        backspace_key: str = "*"):
+        """Feed one keypad event into the active number buffer (DUAL INPUT).
+
+        Returns the DTMFResult from the controller. When an EXACT-length
+        identifier is completed by keypad — or a caller presses SUBMIT on a
+        valid variable-length one — the matching slot (account_no/mobile) is
+        written and the buffer cleared, exactly like the speech path, so the
+        rest of the stack (read-back, confirmation, tools) is mode-agnostic."""
+        from .dtmf import DTMFController
+        nb = self.number_buffer
+        if not nb.active:
+            return None
+        if self._dtmf is None or getattr(self._dtmf, "buf", None) is not nb:
+            self._dtmf = DTMFController(nb, submit_key, backspace_key)
+        res = self._dtmf.press(key)
+        if (res.complete or res.submitted) and res.valid:
+            field_name = nb.field
+            digits = nb.digits
+            if field_name in ("account_no", "mobile"):
+                setattr(self, field_name, digits)
+            nb.clear()
+        return res
+
+    def number_capture_snapshot(self) -> dict | None:
+        """Live NUMBER CAPTURE MODE state for the frontend (None when idle)."""
+        return self.number_buffer.snapshot() if self.number_buffer.active else None
 
     def absorb_tool_result(self, tool: str, args: dict, result: dict) -> None:
         if tool == "verify_customer" and result.get("verified"):
@@ -163,6 +219,30 @@ class CallMemory:
             lines.append(f"Ticket registered this call: {c.category} {c.ticket_no}{eta}")
         if self.open_issues:
             lines.append("Unresolved topics to return to: " + "; ".join(self.open_issues))
+        # NUMBER CAPTURE MODE — expose the in-progress buffer so the agent reads
+        # back exactly what's captured (never guessing digits), knows how many
+        # remain, and confirms only when it's complete.
+        nb = self.number_buffer
+        if nb.active and nb.digits:
+            snap = nb.snapshot()
+            remaining = (f", {snap['expected'] - snap['count']} digit(s) still needed"
+                         if snap["expected"] else "")
+            mode = {"dtmf": " via keypad", "hybrid": " (spoken + keypad)"}.get(
+                snap.get("input_mode", "speech"), "")
+            capline = (
+                f"[CAPTURING {snap['label']}{mode}] So far: {snap['grouped']} "
+                f"({snap['count']} digit(s){remaining}). Read back ONLY these "
+                "captured digits; never invent the rest. Confirm only once the "
+                "number is complete.")
+            if not snap.get("prefix_ok", True):
+                capline += (" NOTE: the first digit is not valid for this number "
+                            "type — tell the caller and ask them to re-check it.")
+            unc = nb.uncertain_tail()
+            if unc and snap["count"]:
+                a, b = unc
+                capline += (f" LOW CONFIDENCE on digits {a + 1}–{b}: if unsure, "
+                            "re-ask ONLY that part, not the whole number.")
+            lines.append(capline)
         if len(lines) == 2 and not self.verified:
             lines.append("Nothing known yet — you still need the account or mobile number.")
         return "\n".join(lines)

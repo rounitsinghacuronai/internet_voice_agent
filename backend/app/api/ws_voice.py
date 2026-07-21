@@ -63,7 +63,7 @@ from ..audio.vad import SileroVAD
 from ..barge_in.manager import InterruptionManager
 from ..config import Settings
 from ..conversation.manager import ConversationManager, TurnChunk
-from ..conversation.numbers import looks_like_number_fragment
+from ..conversation.numbers import looks_like_number_fragment, spoken_to_digits
 from ..conversation.state import CallState, CallStateMachine
 
 log = logging.getLogger(__name__)
@@ -109,11 +109,15 @@ class VoiceSession:
         # one-per-sentence so there is no pumping and no added latency; the same
         # leveled PCM feeds both the caller and the AEC reference.
         self._loudness = OutputLoudness(
-            avg_alpha=self.s.tts_loudness_avg_alpha,
             max_gain=self.s.tts_loudness_max_gain,
             min_gain=self.s.tts_loudness_min_gain,
             silence_rms=self.s.tts_loudness_silence_rms,
             limiter_ceiling=self.s.tts_loudness_limiter_ceiling,
+            sample_rate=self.s.tts_sample_rate,
+            attack_ms=self.s.tts_loudness_attack_ms,
+            release_ms=self.s.tts_loudness_release_ms,
+            avg_ms=self.s.tts_loudness_avg_ms,
+            window_ms=self.s.tts_loudness_window_ms,
         ) if self.s.tts_loudness_normalize else None
 
         # State machine — single source of truth for what the call is doing
@@ -239,6 +243,10 @@ class VoiceSession:
                 msg = await self.ws.receive()
                 if msg.get("type") == "websocket.disconnect":
                     break
+                # DUAL INPUT: keypad events surfaced by the Exotel transport.
+                if msg.get("type") == "dtmf":
+                    await self._on_dtmf(msg.get("digit", ""))
+                    continue
                 if (data := msg.get("bytes")) is not None:
                     await self._on_audio(data)
                 elif (text := msg.get("text")) is not None:
@@ -581,18 +589,65 @@ class VoiceSession:
             # turn on a partial number. Only surfaces to the LLM once the
             # complete, validated number is assembled — see conversation/numbers.py.
             memory = self.manager.memory
-            if memory.number_buffer.active and looks_like_number_fragment(tr.text):
-                digits, complete = memory.feed_number_fragment(tr.text)
+            # While actively collecting a number, treat a digit-heavy utterance as
+            # a fragment even if the noisy code-mix STT wrapped it in stray words
+            # ("...7 2 6 7 8 5 Noise 755", "72 Paytm 650755"): spoken_to_digits
+            # ignores the non-digit noise, so we still capture the digits instead
+            # of running a full LLM turn that assembles a wrong number.
+            if memory.number_buffer.active and (
+                    looks_like_number_fragment(tr.text)
+                    or len(spoken_to_digits(tr.text)) >= 3):
+                from ..conversation.numbers import (number_type, group_for_readback,
+                                                    mask_digits)
+                field = memory.number_buffer.field
+                prev_len = len(memory.number_buffer.digits)
+                conf = tr.language_confidence if tr.language_confidence is not None else 1.0
+                digits, complete = memory.feed_number_fragment(tr.text, confidence=conf)
+                t = number_type(field)
+                exp = t.exact if (t and t.exact) else memory.number_buffer.expected_len
+                # LIVE CAPTURE — push the masked/grouped progress to the UI. Non-
+                # blocking telemetry; the audio path is untouched.
+                await self._send({
+                    "type": "number",
+                    "stage": "validating" if complete else "awaiting",
+                    "field": field,
+                    "label": (t.label if t else field) or "",
+                    "masked": mask_digits(digits, exp),
+                    "grouped": group_for_readback(digits, field),
+                    "count": len(digits),
+                    "expected": exp,
+                    "confidence": conf,
+                    "complete": complete,
+                })
                 log.info(
                     "session %s: number fragment for '%s' → %r (complete=%s)",
                     self.session_id,
-                    memory.number_buffer.field or "(just completed)",
+                    field or "(just completed)",
                     digits,
                     complete,
                 )
                 if not complete:
-                    # Keep listening silently — do not send a partial number to
-                    # the LLM, and do not ask the caller to repeat anything.
+                    # HUMAN "NOTING": if this fragment added digits, read the
+                    # running total back and invite the caller to continue — like
+                    # an executive jotting a number. Only when it actually grew
+                    # (never on noise / a no-op), and never a full-number confirm
+                    # (that happens once, at completion).
+                    grew = len(digits) > prev_len and bool(digits)
+                    if grew and getattr(self.s, "number_capture_ack_enabled", True):
+                        ack = self.manager.number_ack_line(digits, field)
+                        if ack is not None:
+                            self.sm.transition(CallState.SPEAKING, "number_ack")
+                            self.pipeline.notify_tts_started()
+                            try:
+                                await self._send({"type": "state", "value": "speaking"})
+                                await self._speak_sentence(ack)
+                                await self._drain_playback("number_ack")
+                            except Exception as e:                    # noqa: BLE001
+                                log.warning("session %s: number-ack TTS failed: %s",
+                                            self.session_id, e)
+                            finally:
+                                self.pipeline.notify_tts_ended()
+                    # Do not send a partial number to the LLM; keep listening.
                     self._lat = {}  # no turn ran — drop the stale timer
                     self.sm.transition(CallState.LISTENING, "number_fragment_buffered")
                     await self._send({"type": "state", "value": "listening"})
@@ -643,8 +698,79 @@ class VoiceSession:
                 name=f"text_{self.session_id}",
             )
             self._active_turn_task = task
+        elif t == "dtmf":
+            # Browser/test keypad → same path as an Exotel keypad event.
+            await self._on_dtmf(str(msg.get("digit", "")))
         elif t == "end":
             await self.ws.close()
+
+    async def _on_dtmf(self, digit: str) -> None:
+        """Handle one keypad press (DUAL-INPUT number capture).
+
+        Digits/backspace update the live buffer silently (banker's-IVR style —
+        no per-key chatter). When the number auto-completes at its exact length,
+        or the caller presses the submit key on a valid number, we run one normal
+        turn so the agent reads it back and confirms in the caller's language.
+        The audio pipeline is never blocked — this only runs between turns."""
+        if not getattr(self.s, "dtmf_enabled", True) or not digit:
+            return
+        memory = self.manager.memory
+        if not memory.number_buffer.active:
+            # No number is being collected — a stray keypress. Ignore rather than
+            # guess which identifier the caller means.
+            log.info("session %s: DTMF %r ignored — no active capture",
+                     self.session_id, digit)
+            return
+
+        res = memory.feed_dtmf_digit(
+            digit,
+            submit_key=getattr(self.s, "dtmf_submit_key", "#"),
+            backspace_key=getattr(self.s, "dtmf_backspace_key", "*"))
+        if res is None:
+            return
+        self.sm.transition(CallState.NUMBER_CAPTURE, f"dtmf:{res.action}")
+
+        # Live UI: reflect keypad progress + input mode + validation.
+        snap = memory.number_buffer.snapshot() if memory.number_buffer.active else {}
+        await self._send({
+            "type": "number",
+            "stage": "validating" if (res.complete or res.submitted) else "awaiting",
+            "field": snap.get("field"),
+            "label": snap.get("label", ""),
+            "masked": snap.get("masked", res.digits),
+            "grouped": snap.get("grouped", res.digits),
+            "count": len(res.digits),
+            "expected": snap.get("expected"),
+            "confidence": 1.0,
+            "complete": res.complete,
+            "input_mode": snap.get("input_mode", "dtmf"),
+            "prefix_ok": snap.get("prefix_ok", True),
+            "valid": res.valid,
+            "action": res.action,
+        })
+        log.info("session %s: DTMF %r → action=%s digits=%r complete=%s valid=%s",
+                 self.session_id, digit, res.action, res.digits, res.complete, res.valid)
+
+        # Completed (or explicitly submitted & valid) → confirm via a real turn.
+        if res.complete or (res.submitted and res.valid):
+            if self.sm.is_interruptible():
+                await self._trigger_barge_in()
+                await asyncio.sleep(0)
+            self.sm.transition(CallState.THINKING, "dtmf_complete")
+            from ..conversation.numbers import group_for_readback
+            spoken = group_for_readback(res.digits) or res.digits
+            await self._send({"type": "user", "text": spoken, "lang": "unknown"})
+            task = asyncio.create_task(
+                self._run_turn_guarded(spoken, "unknown"),
+                name=f"dtmf_turn_{self.session_id}")
+            self._active_turn_task = task
+        elif res.action in ("cancel", "restart"):
+            # Keep the caller informed on a destructive keypad action.
+            await self._send({"type": "state", "value": "listening"})
+            self.sm.transition(CallState.LISTENING, f"dtmf_{res.action}")
+        else:
+            self.sm.transition(CallState.LISTENING, "dtmf_digit")
+            await self._send({"type": "state", "value": "listening"})
 
     async def _run_turn_guarded(self, text: str, stt_lang: str) -> None:
         """Thin wrapper for text-mode turns with CancelledError handling."""
@@ -924,6 +1050,19 @@ class VoiceSession:
                               "complaint_id": ctx.complaint_id,
                               "summary": ctx.summary})
             self.sm.transition(CallState.WAITING_FOR_USER, "transferred")
+            # REAL Exotel API transfer: Exotel is now bridging the caller's
+            # EXISTING leg to the executive and will close our media stream with a
+            # `stop`. Closing it ourselves could cut the leg mid-bridge, so we
+            # leave it open and let Exotel end it. Flow-handoff and the browser/
+            # simulation path DO close here (flow needs the stream to end so the
+            # Exotel Connect applet takes over).
+            mode_flow = (result.detail or {}).get("mode") == "flow"
+            real_api_transfer = (bool(ctx.call_sid) and not mode_flow
+                                 and not str(result.reference).startswith("SIM-"))
+            if real_api_transfer:
+                log.info("session %s: real Exotel transfer in progress — leaving "
+                         "the leg to Exotel", self.session_id)
+                return
             await self._send({"type": "call_end"})
             await self.ws.close()
             return

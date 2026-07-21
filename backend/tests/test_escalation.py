@@ -58,6 +58,27 @@ def test_explicit_human_request_escalates():
         assert d.should_transfer and d.source == "customer_request", text
 
 
+def test_devanagari_transliterated_human_request_escalates():
+    # Sarvam emits these Devanagari spellings for a Hindi caller asking for a
+    # senior executive / agent — the exact miss that made the caller ask twice.
+    eng, mem = _engine()
+    for text in ["आप मेरे को एक सीनियर एग्जीक्यूटिव से कॉल पिला सकते हो?",
+                 "मेरे को सीनियर एग्ज़िक्यूटिव से बात करनी है",
+                 "किसी एजेंट से बात कराओ",
+                 "मुझे मैनेजर से बात करनी है"]:
+        d = eng.evaluate(text, mem)
+        assert d.should_transfer and d.source == "customer_request", text
+
+
+def test_new_connection_does_not_falsely_escalate():
+    # 'नया कनेक्शन' must NOT trip the broadened human-request matcher.
+    eng, mem = _engine()
+    for text in ["मुझे नया कनेक्शन लगवाना है", "फाइबर कनेक्शन चाहिए ₹399 वाला",
+                 "I want a new fiber connection"]:
+        d = eng.evaluate(text, mem, failed_attempts=0)
+        assert not d.should_transfer, text
+
+
 def test_category_rules_escalate_with_priority():
     eng, mem = _engine()
     cases = {

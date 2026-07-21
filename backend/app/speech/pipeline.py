@@ -14,6 +14,7 @@ Settings.speech_llm_restructure is on (higher human-feel, some added latency).
 from __future__ import annotations
 
 from ..config import Settings
+from ..conversation.purity import enforce_language_purity
 from ..persona import get_persona
 from .director import VoiceDirector
 from .engine import HumanSpeechEngine
@@ -74,6 +75,17 @@ class SpeechDirector:
         if corrected != cleaned:
             notes.append("gender-fix")
             cleaned = corrected
+
+        # ── language purity: de-blend hi↔mr drift before TTS ──
+        # Gemini Flash slides between Hindi and Marathi mid-sentence (shared
+        # script). The LanguageEngine has already pinned the correct base
+        # language for this line, so any sister-language tokens here are drift —
+        # rewrite them. Re-run gender after, since the swap can introduce a
+        # Hindi/Marathi first-person form of the opposite gender.
+        pure, purity_changed = enforce_language_purity(cleaned, lang)
+        if purity_changed:
+            notes.append("purity-fix")
+            cleaned = self.persona.enforce_gender(pure, lang)
 
         segments = self.engine.shape(cleaned, lang, profile, ctx, self.variation)
         segments = self.prosody.plan(segments, lang, profile, ctx)

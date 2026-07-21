@@ -38,6 +38,54 @@ async def tickets(request: Request, q: str = "", limit: int = 100):
     return {"tickets": svc.store.search(q, min(limit, 500))}
 
 
+@router.api_route("/exotel/transfer-destination", methods=["GET", "POST"])
+async def exotel_transfer_destination(request: Request):
+    """Exotel's Connect applet fetches this to decide whom to dial AFTER the
+    Voicebot applet ends. Only calls the AI escalated have a pending entry, so:
+      • escalated call  → returns the executive's number (Exotel bridges the
+        SAME live caller — a true seamless transfer, no re-dial);
+      • normal call     → returns an empty destination, so Exotel connects no one
+        and the call simply ends.
+    Exotel passes CallSid as a parameter; we match it to the pending registry."""
+    params: dict = dict(request.query_params)
+    try:
+        form = await request.form()
+        params.update({k: v for k, v in form.items()})
+    except Exception:                                    # noqa: BLE001
+        pass
+    call_sid = (params.get("CallSid") or params.get("call_sid")
+                or params.get("CallSidLegacy") or "")
+    svc = getattr(request.app.state.deps, "transfer", None)
+    pending = svc.pending_for(call_sid) if (svc and call_sid) else None
+    log.info("exotel transfer-destination: call_sid=%s → %s (params=%s)",
+             call_sid, "CONNECT " + pending["number"] if pending else "no-connect",
+             {k: params.get(k) for k in ("CallSid", "From", "To", "CallFrom")})
+
+    settings = request.app.state.deps.settings
+    if not pending:
+        # No escalation for this call → no destination → call ends normally.
+        return {"fetch_after_attempt": False, "destination": {"numbers": []}}
+
+    number = _exotel_dial_format(pending["number"])
+    caller_id = getattr(settings, "exotel_caller_id", "") or ""
+    # Return the number in the shapes Exotel's Connect-applet fetch accepts; extra
+    # keys are ignored by Exotel, so this maximises compatibility.
+    return {
+        "fetch_after_attempt": False,
+        "destination": {"numbers": [number]},
+        "outgoing_phone_number": caller_id,
+        "record": True,
+    }
+
+
+def _exotel_dial_format(number: str) -> str:
+    """Domestic Exotel dialling wants a leading 0 on a 10-digit mobile."""
+    n = "".join(ch for ch in str(number) if ch.isdigit())
+    if len(n) == 10 and n[0] in "6789":
+        return "0" + n
+    return n
+
+
 @router.api_route("/exotel/transfer-status", methods=["GET", "POST"])
 async def exotel_transfer_status(request: Request):
     """Callback Exotel posts the outcome of a call transfer to (configure as

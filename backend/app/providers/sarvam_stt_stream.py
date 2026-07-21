@@ -62,7 +62,13 @@ class SarvamSTTStream:
     async def _ensure_connected(self) -> bool:
         if self.disabled:
             return False
-        lang = _LANG_CODE.get(self._lang_getter() or "und", "mr-IN")
+        # AUTO-DETECT, never force a language. Forcing the engine's current guess
+        # (default Marathi) made Saaras transcribe a Hindi/English caller AS
+        # Marathi — which kept the language engine (and therefore the whole call,
+        # replies AND number read-backs) stuck in Marathi. Matching the REST path
+        # (language_code="unknown") lets Saaras label each utterance by what was
+        # ACTUALLY spoken, so the language engine can follow the caller.
+        lang = getattr(self.s, "stt_language", None) or "unknown"
         if self._ws is not None and lang == self._lang:
             return True
         await self.close(reconnecting=True)

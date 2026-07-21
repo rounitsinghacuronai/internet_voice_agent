@@ -50,7 +50,7 @@ from ..config import Settings
 from ..persona import get_persona
 from ..prompts.loader import compose_system_prompt
 from .escalation import (EscalationDecision, EscalationEngine,
-                         build_escalation_summary)
+                         build_escalation_summary, _HUMAN_REQUEST)
 from ..telephony.transfer_service import TransferContext
 from ..providers.base import LLMProvider, ProviderError
 from ..speech.director import detect_caller_emotion
@@ -82,6 +82,21 @@ _PAUSE_SPLIT = re.compile(r"(?<=[,،—])\s+")
 # sentence lets the voice carry natural intonation and emotion across it. Only a
 # genuinely long run-on sentence now splits early, and only for first-audio latency.
 _FORCE_FLUSH_CHARS = 160
+
+# A "connecting" verb — paired with a human-target word (see _HUMAN_REQUEST),
+# this means the agent PROMISED a transfer. "connect" is a substring of
+# "connection", but the AND-with-_HUMAN_REQUEST gate keeps "new connection
+# registered" from ever tripping it.
+_CONNECT_VERB = re.compile(
+    r"(कनेक्ट कर|जोड़ रह|जोड़ता|जोड़ दे|जोड़ूँ|जोडत|जोडतो|जोडते|जोडून|"
+    r"connect|connecting|transferr?ing|transfer you)", re.IGNORECASE)
+
+
+def _promised_transfer(text: str) -> bool:
+    """True when a spoken line tells the caller they're being connected to a
+    human/senior/executive — used to detect a transfer the model announced but
+    forgot to actually perform (no transfer_to_senior_executive call)."""
+    return bool(text and _CONNECT_VERB.search(text) and _HUMAN_REQUEST.search(text))
 
 # Tools that represent a troubleshooting attempt — each successful call that
 # leaves the issue unresolved bumps the decision engine's failed-attempts count.
@@ -148,6 +163,10 @@ class ConversationManager:
         # Decision engine (intent/sentiment/severity/failed-attempts/request/tool).
         self._escalation = EscalationEngine(settings)
         self._escalation_decision: EscalationDecision = EscalationDecision()
+        # Backstop: set when the model SAYS it is connecting the caller to a
+        # human but does not call transfer_to_senior_executive. Forces the
+        # transfer on the next turn so the caller never has to ask twice.
+        self._force_transfer_next = False
         # Set to a TransferContext when transfer_to_senior_executive fires — the
         # VoiceSession reads it after the turn's audio drains and performs the
         # actual leg transfer (mirrors end_call_requested).
@@ -275,9 +294,22 @@ class ConversationManager:
         return self._voice_fixed(text, "mr", StyleName.GREETING)
 
     def silence_nudge(self) -> TurnChunk:
-        """Gentle re-prompt spoken when the caller has gone silent."""
-        lang = _lang_for(self.memory.language, self.persona.silence_nudge)
-        text = self.persona.silence_nudge[lang]
+        """Gentle re-prompt spoken when the caller has gone silent — context-aware
+        so it never re-asks a problem the caller already explained."""
+        # 1) Mid number-capture → patient, number-specific.
+        if self.memory.number_buffer.active and self.persona.silence_nudge_number:
+            table = self.persona.silence_nudge_number
+        # 2) Conversation already underway (verified, an open issue, or the caller
+        #    has spoken a real turn) → "still there?" WITHOUT re-asking the problem.
+        elif ((self.memory.verified or self.memory.open_issues
+                or any(m.get("role") == "user" for m in self.memory.history))
+               and self.persona.silence_nudge_midcall):
+            table = self.persona.silence_nudge_midcall
+        # 3) Very start of call → the original friendly opener.
+        else:
+            table = self.persona.silence_nudge
+        lang = _lang_for(self.memory.language, table)
+        text = table[lang]
         self.memory.history.append({"role": "assistant", "content": text})
         return self._voice_fixed(text, lang, StyleName.DEFAULT)
 
@@ -295,6 +327,22 @@ class ConversationManager:
         text = self.persona.transfer_intro[lang]
         self.memory.history.append({"role": "assistant", "content": text})
         return self._voice_fixed(text, lang, StyleName.CLOSING)
+
+    def number_ack_line(self, digits: str, field: str | None) -> "TurnChunk | None":
+        """Human 'noting' line: read the digits captured so far, grouped, and
+        invite the caller to continue — spoken in their current language. Returns
+        None when there's nothing to acknowledge."""
+        if not digits or not self.persona.number_capture_ack:
+            return None
+        from .numbers import group_for_readback
+        grouped = group_for_readback(digits, field).strip()
+        if not grouped:                       # never speak an empty "…, continue"
+            return None
+        lang = _lang_for(self.memory.language, self.persona.number_capture_ack)
+        text = self.persona.number_capture_ack[lang].format(digits=grouped)
+        self.memory.history.append({"role": "assistant", "content": text})
+        # VERIFICATION style = deliberate, slower — numbers land clearly.
+        return self._voice_fixed(text, lang, StyleName.VERIFICATION)
 
     def transfer_failed_lines(self) -> list[TurnChunk]:
         """Spoken when the transfer could not complete: apologise + offer a
@@ -330,6 +378,14 @@ class ConversationManager:
                 user_text, self.memory, mood=self._caller_emotion,
                 failed_attempts=self._failed_attempts,
                 last_tool_results=self._last_tool_results)
+            # Honour a promise the model made last turn but never executed.
+            if self._force_transfer_next and not self._escalation_decision.should_transfer:
+                self._escalation_decision = EscalationDecision(
+                    True, "agent_promised_transfer", "Customer Requested Human",
+                    "HIGH", "promise_guard")
+                log.info("turn %d: forcing transfer — agent promised it last turn "
+                         "but did not call the tool", self.turn_no)
+            self._force_transfer_next = False
             if self._escalation_decision.should_transfer:
                 log.info("turn %d: escalation recommended — %s (%s, %s)",
                          self.turn_no, self._escalation_decision.reason,
@@ -364,6 +420,8 @@ class ConversationManager:
             return
 
         # ── normal LLM turn with tool loop ──
+        hist_start = len(self.memory.history)
+        tools_start = len(self._tools_used)
         try:
             async for chunk in self._llm_turn():
                 yield chunk
@@ -379,6 +437,21 @@ class ConversationManager:
             text = self.persona.apology[lang]
             self.memory.history.append({"role": "assistant", "content": text})
             yield self._voice_fixed(text, lang, StyleName.DEFAULT)
+
+        # ── Transfer-promise backstop: if the agent TOLD the caller it was
+        # connecting them to a human but never called transfer_to_senior_executive
+        # this turn, arm a forced transfer for the next turn so the caller is not
+        # left waiting and does not have to ask again.
+        if not self.transfer_requested and getattr(self.s, "transfer_enabled", True):
+            said_this_turn = " ".join(
+                m.get("content") or "" for m in self.memory.history[hist_start:]
+                if m.get("role") == "assistant")
+            fired = "transfer_to_senior_executive" in self._tools_used[tools_start:]
+            if _promised_transfer(said_this_turn) and not fired:
+                self._force_transfer_next = True
+                log.warning("turn %d: agent promised a transfer but did not call "
+                            "the tool — arming forced transfer for next turn",
+                            self.turn_no)
 
         # ── Number Recognition Engine: arm the buffer if the agent just asked
         # for an account/mobile/OTP number, so a fragmented reply across
@@ -742,10 +815,29 @@ async def _late_tool_absorb(
 # so any sentence carrying one is dropped before it reaches TTS.
 _LEAK_MARKERS = re.compile(
     r"ACTIVE LANGUAGE|CALL MEMORY|KNOWLEDGE CONTEXT|CALLER MOOD|CALLER ALREADY VERIFIED"
-    r"|GRAMMATICAL GENDER|PUNE REGION ONLY|MAHARASHTRA CIRCLE|Identity verified:"
-    r"|Reply ENTIRELY in this language|\[CALLER|\[KNOWLEDGE",
+    r"|GRAMMATICAL GENDER|PUNE REGION ONLY|MAHARASHTRA CIRCLE"
+    # identity / memory-block labels (never spoken)
+    r"|Identity verified:|OTP verified:|Caller name:|Registered mobile:"
+    r"|Account number:|Account/Customer ID|Service type:|Current plan:"
+    r"|Location:\s|Caller mobile|Unresolved topics|Ticket registered this call"
+    # memory-block header fragments (survive a sentence split)
+    r"|facts already known|NEVER ask for these again|Nothing known yet"
+    # language directive (any wording)
+    r"|Reply ENTIRELY in this language|every word of your reply|chose this language"
+    r"|reply must be in it|until they ask otherwise"
+    # number-capture + escalation directives
+    r"|CAPTURING|Read back ONLY|number is complete|ESCALATION REQUIRED"
+    r"|transfer_to_senior_executive|escalation_reason"
+    # bracketed directive openers
+    r"|\[CALL|\[CALLER|\[KNOWLEDGE|\[CAPTURING|\[ESCALATION",
     re.IGNORECASE,
 )
+
+# A memory-block line is often "Label: value Label: value…" — if a sentence
+# carries 2+ known field labels it's a leaked block even if worded oddly.
+_MEMORY_LABELS = re.compile(
+    r"(name|mobile|account|number|verified|plan|location|service|language|ticket)\s*:",
+    re.IGNORECASE)
 
 
 def _sanitize(text: str) -> str:
@@ -767,7 +859,8 @@ def _sanitize(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     # Drop any sentence that carries a leaked internal directive — the caller
     # must never hear the agent's own instructions read out loud.
-    if cleaned and _LEAK_MARKERS.search(cleaned):
+    if cleaned and (_LEAK_MARKERS.search(cleaned)
+                    or len(_MEMORY_LABELS.findall(cleaned)) >= 2):
         log.warning("dropped leaked prompt directive from speech: %r", cleaned[:90])
         return ""
     return cleaned

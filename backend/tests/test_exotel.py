@@ -228,17 +228,26 @@ class TestReceive:
         msg = asyncio.run(t.receive())
         assert msg["type"] == "websocket.disconnect"
 
-    def test_dtmf_and_mark_are_skipped_until_media(self, settings):
-        pcm = _pcm(50, 16000)
+    def test_dtmf_surfaces_as_dtmf_event(self, settings):
+        # DUAL-INPUT capture: keypad presses are now surfaced to the VoiceSession
+        # (previously they were swallowed). One event per key.
         t, ws = self._accepted(settings, 16000, [
             {"type": "websocket.receive", "text": json.dumps(
                 {"event": "dtmf", "dtmf": {"digit": "5", "duration": "100"}})},
+        ])
+        import asyncio
+        msg = asyncio.run(t.receive())
+        assert msg["type"] == "dtmf" and msg["digit"] == "5"
+
+    def test_mark_is_skipped_until_media(self, settings):
+        pcm = _pcm(50, 16000)
+        t, ws = self._accepted(settings, 16000, [
             {"type": "websocket.receive", "text": json.dumps(
                 {"event": "mark", "mark": {"name": "x"}})},
             {"type": "websocket.receive", "text": json.dumps(_media_msg(pcm))},
         ])
         import asyncio
-        msg = asyncio.run(t.receive())   # should skip dtmf+mark, return media
+        msg = asyncio.run(t.receive())   # should skip mark, return media
         assert msg["type"] == "websocket.receive"
         assert msg["bytes"] == pcm
 

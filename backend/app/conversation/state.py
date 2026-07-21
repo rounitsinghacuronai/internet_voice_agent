@@ -21,6 +21,7 @@ class CallState(Enum):
     SPEAKING = "speaking"               # TTS audio is being streamed to the caller
     INTERRUPTED = "interrupted"         # transient: barge-in just fired, cleanup in flight
     WAITING_FOR_USER = "waiting_for_user"  # agent finished speaking, caller hasn't started
+    NUMBER_CAPTURE = "number_capture"   # dedicated dual-input (speech+keypad) digit capture
 
 
 # Legal transitions. Anything else is a bug, not a runtime condition we route around —
@@ -29,13 +30,20 @@ class CallState(Enum):
 _TRANSITIONS: dict[CallState, set[CallState]] = {
     CallState.IDLE: {CallState.LISTENING, CallState.SPEAKING},
     CallState.LISTENING: {CallState.THINKING, CallState.SPEAKING, CallState.IDLE,
-                          CallState.LISTENING},   # SPEAKING: silence re-prompt
+                          CallState.LISTENING, CallState.NUMBER_CAPTURE},
     CallState.THINKING: {CallState.SPEAKING, CallState.INTERRUPTED, CallState.WAITING_FOR_USER,
-                          CallState.LISTENING, CallState.IDLE},
+                          CallState.LISTENING, CallState.IDLE, CallState.NUMBER_CAPTURE},
     CallState.SPEAKING: {CallState.INTERRUPTED, CallState.WAITING_FOR_USER, CallState.LISTENING,
-                         CallState.IDLE},
+                         CallState.IDLE, CallState.NUMBER_CAPTURE},
     CallState.INTERRUPTED: {CallState.LISTENING, CallState.THINKING, CallState.IDLE},
-    CallState.WAITING_FOR_USER: {CallState.LISTENING, CallState.THINKING, CallState.IDLE},
+    CallState.WAITING_FOR_USER: {CallState.LISTENING, CallState.THINKING, CallState.IDLE,
+                                 CallState.NUMBER_CAPTURE},
+    # NUMBER_CAPTURE (dual-input): keypad/voice digits accumulate here, then we
+    # step out to SPEAK an acknowledgement/confirmation, THINK a turn, or resume
+    # LISTENING for more digits.
+    CallState.NUMBER_CAPTURE: {CallState.LISTENING, CallState.SPEAKING, CallState.THINKING,
+                               CallState.WAITING_FOR_USER, CallState.IDLE,
+                               CallState.NUMBER_CAPTURE},
 }
 
 # States in which the caller's voice should be treated as a barge-in rather than a

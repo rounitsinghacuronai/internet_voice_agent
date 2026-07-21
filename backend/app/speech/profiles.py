@@ -17,13 +17,13 @@ PROFILES: dict[StyleName, StyleProfile] = {
     StyleName.GREETING: StyleProfile(
         name=StyleName.GREETING, emotion=Emotion.WARM,
         pace=1.0, pause_scale=1.0, warmth=0.9,
-        lead_in=False, hesitation_ok=False, number_pace=0.9,
+        lead_in=False, hesitation_ok=False, number_pace=0.85,
         preserve_wording=True, label="warm, welcoming, medium pace",
     ),
     StyleName.VERIFICATION: StyleProfile(
         name=StyleName.VERIFICATION, emotion=Emotion.HELPFUL,
         pace=0.95, pause_scale=1.2, warmth=0.6,
-        lead_in=True, hesitation_ok=True, number_pace=0.8,
+        lead_in=True, hesitation_ok=True, number_pace=0.85,
         max_thought_chars=130, label="clear, deliberate, slower for numbers",
     ),
     StyleName.SERVICE_DOWN: StyleProfile(
@@ -41,26 +41,26 @@ PROFILES: dict[StyleName, StyleProfile] = {
     StyleName.COMPLAINT_REGISTERED: StyleProfile(
         name=StyleName.COMPLAINT_REGISTERED, emotion=Emotion.CONFIDENT,
         pace=0.98, pause_scale=1.15, warmth=0.75,
-        lead_in=False, hesitation_ok=False, number_pace=0.78,
+        lead_in=False, hesitation_ok=False, number_pace=0.85,
         label="confident, reassuring",
     ),
     StyleName.EMERGENCY: StyleProfile(
         name=StyleName.EMERGENCY, emotion=Emotion.CALM_URGENT,
         pace=0.98, pause_scale=0.9, warmth=0.7,
-        lead_in=False, hesitation_ok=False, number_pace=0.8,
+        lead_in=False, hesitation_ok=False, number_pace=0.85,
         preserve_wording=True, max_thought_chars=120,
         label="calm, direct, urgent",
     ),
     StyleName.ESCALATION: StyleProfile(
         name=StyleName.ESCALATION, emotion=Emotion.REASSURING,
         pace=0.97, pause_scale=1.05, warmth=0.75,
-        lead_in=True, hesitation_ok=False, number_pace=0.82,
+        lead_in=True, hesitation_ok=False, number_pace=0.85,
         label="steady, reassuring hand-off",
     ),
     StyleName.CLOSING: StyleProfile(
         name=StyleName.CLOSING, emotion=Emotion.WARM,
         pace=1.02, pause_scale=1.0, warmth=0.9,
-        lead_in=False, hesitation_ok=False, number_pace=0.9,
+        lead_in=False, hesitation_ok=False, number_pace=0.85,
         label="friendly, concise",
     ),
     StyleName.DEFAULT: StyleProfile(
@@ -97,7 +97,7 @@ def apply_caller_emotion(profile: StyleProfile, caller_emotion: str | None) -> S
         # Extra patience and warmth, one simple step at a time, numbers slower.
         return replace(profile, emotion=Emotion.PATIENT,
                        pace=min(profile.pace, 0.9), pause_scale=max(profile.pause_scale, 1.25),
-                       number_pace=min(profile.number_pace, 0.75),
+                       number_pace=0.85,
                        max_thought_chars=min(profile.max_thought_chars, 120), warmth=0.85)
     if caller_emotion == "worried":
         # Drop small talk, become calm and steady and reassuring.

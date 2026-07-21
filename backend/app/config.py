@@ -46,11 +46,30 @@ class Settings(BaseSettings):
     # (no fixed target to mis-tune) and deliberately gentle — it only squashes
     # outliers, it does not flatten natural prosody.
     tts_loudness_normalize: bool = True
-    tts_loudness_avg_alpha: float = 0.30   # EMA weight of each new sentence on the running level
-    tts_loudness_max_gain: float = 2.0     # loudest boost for a too-quiet sentence (+6 dB)
-    tts_loudness_min_gain: float = 0.5     # deepest cut for a too-loud sentence (−6 dB)
-    tts_loudness_silence_rms: float = 0.005  # below this a chunk is silence — never boosted
+    tts_loudness_max_gain: float = 2.0     # loudest boost for a too-quiet passage (+6 dB)
+    tts_loudness_min_gain: float = 0.5     # deepest cut for a too-loud passage (−6 dB)
+    tts_loudness_silence_rms: float = 0.005  # below this a window is silence — gain HELD, never boosted
     tts_loudness_limiter_ceiling: float = 0.98  # soft-clip ceiling to prevent hard clipping
+    # Continuous (within-sentence) leveling time constants. Slow enough to smooth
+    # phrase-level "drop then rise" swings WITHOUT chasing syllables (no pumping).
+    tts_loudness_attack_ms: float = 120.0  # gain DROPS this fast when a passage is too loud
+    tts_loudness_release_ms: float = 350.0 # gain RISES this slowly when a passage is quiet
+    tts_loudness_avg_ms: float = 2500.0    # time constant of the running-average target level
+    tts_loudness_window_ms: float = 10.0   # analysis window for the level detector
+    # NUMBER CAPTURE: read the digits captured so far back to the caller after
+    # each pause ("72678… got it, please continue"), the way a human executive
+    # notes a number. Off → silent buffering (old behaviour).
+    number_capture_ack_enabled: bool = True
+    # ── DTMF (keypad) capture — DUAL INPUT ──
+    # Callers may key in any numeric identifier instead of speaking it. The agent
+    # offers both methods whenever it asks for a number. Control keys and the
+    # inter-digit timeout below are all overridable per deployment.
+    dtmf_enabled: bool = True
+    dtmf_submit_key: str = "#"          # caller presses this to say "done"
+    dtmf_backspace_key: str = "*"       # delete last digit; twice on empty = restart
+    # After this much keypad silence with a VALID number buffered, treat it as
+    # submitted (caller finished keying and didn't press #).
+    dtmf_inter_digit_timeout_ms: int = 4000
     # ── streaming providers (sub-1.1s latency; needs `pip install sarvamai`) ──
     # STT over WebSocket: transcribes WHILE the caller speaks — final transcript
     # ~150ms after end-of-speech instead of a 350-700ms REST round trip. Falls
@@ -187,11 +206,26 @@ class Settings(BaseSettings):
     # dial is skipped), so nothing is hardcoded and it is safe to ship now.
     transfer_enabled: bool = True             # master switch for the escalation feature
     exotel_transfer_enabled: bool = False     # perform the REAL Exotel dial (needs creds below)
+    # Transfer mechanism:
+    #   "flow" (recommended) — SEAMLESS: the bot speaks the hand-off line and ends
+    #     its stream; the Exotel call flow's next applet (a Connect applet dialing
+    #     the executive) bridges the SAME live caller — no second call, no re-dial.
+    #     Requires a Connect applet after the Voicebot applet in App Bazaar.
+    #   "api" — uses the Calls/connect REST API. NOTE this is click-to-call: it
+    #     places NEW calls to both parties (they get re-dialled from the ExoPhone),
+    #     so it is NOT a true live-call transfer. Kept for accounts without a flow.
+    exotel_transfer_mode: str = "flow"        # flow | api
     exotel_sid: str = ""                      # Exotel account SID (subdomain)
     exotel_subdomain: str = "api.exotel.com"  # api.exotel.com | api.in.exotel.com …
     exotel_transfer_number: str = ""          # executive / hunt-group number to dial
     exotel_caller_id: str = ""                # your ExoPhone (CallerId) for the transfer leg
     exotel_transfer_callback_url: str = ""    # Exotel posts transfer status here (optional)
+    # Credentials for the transfer API ONLY. Kept SEPARATE from exotel_api_key/
+    # token (which gate the inbound /ws/exotel socket) so enabling transfers can
+    # never accidentally start rejecting incoming calls. Falls back to the inbound
+    # creds if these are blank.
+    exotel_transfer_api_key: str = ""
+    exotel_transfer_api_token: str = ""
     transfer_retry_max: int = 2               # transfer attempts before offering a callback
     transfer_retry_base_s: float = 1.5
     # Human-readable executive/queue label shown to the caller & ops (placeholder

@@ -154,9 +154,13 @@ class LanguageEngine:
                         "Hindi or English — then follow whatever they choose.")
             return ("ACTIVE LANGUAGE: not yet known. Open neutrally; adapt to whatever "
                     "language the caller uses first. Do not ask them to choose yet.")
+        switch_now = ("If your PREVIOUS replies were in a different language, SWITCH "
+                      "to this one starting with your very next word — do not stay in "
+                      "the old language just because the conversation began in it. ")
         rule = ("The caller explicitly chose this language — every word of your reply "
-                "must be in it until they ask otherwise."
+                "must be in it until they ask otherwise. " + switch_now
                 if self.pinned else
+                switch_now +
                 "Reply ENTIRELY in this language. Everyday English loanwords the caller "
                 "themselves uses (bill, recharge, network, data) are fine inside it — "
                 "but NEVER blend Hindi and Marathi: a Marathi reply contains zero Hindi "

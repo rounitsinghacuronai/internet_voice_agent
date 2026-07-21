@@ -228,10 +228,15 @@ class SarvamTTS:
         base = dict(target_language_code=_LANG_CODE.get(lang, "mr-IN"),
                     speaker=self.speaker, pace=pace)
         # (config-extras, assumed source sample rate when not self-describing)
+        # WAV is tried FIRST: it is the config Sarvam Bulbul v3 actually honours on
+        # the streaming socket (self-describing rate, so we just resample). The
+        # pcm+speech_sample_rate shape is accepted but silently yields zero audio
+        # on the current server build, which used to log a spurious
+        # "produced no audio" warning and waste a probe on every cold start.
         attempts = self._ws_cfg_known or [
+            ({"output_audio_codec": "wav"}, None),        # rate read from header
             ({"output_audio_codec": "pcm",
               "speech_sample_rate": self.s.tts_sample_rate}, self.s.tts_sample_rate),
-            ({"output_audio_codec": "wav"}, None),        # rate read from header
             ({"output_audio_codec": "pcm"}, 22050),       # Bulbul REST default
         ]
 

@@ -238,8 +238,12 @@ class ExotelTransport:
                 self._closed = True
                 return {"type": "websocket.disconnect"}
             elif event == "dtmf":
+                # Surface keypad presses to the VoiceSession (DUAL-INPUT capture).
+                # Exotel sends one event per key; digit may be 0-9, '*' or '#'.
                 digit = (data.get("dtmf") or {}).get("digit")
                 log.info("exotel dtmf: %s", digit)
+                if digit:
+                    return {"type": "dtmf", "digit": str(digit)}
                 continue
             elif event in ("connected", "mark", "clear"):
                 continue

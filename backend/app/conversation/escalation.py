@@ -28,12 +28,28 @@ from dataclasses import dataclass, field
 HIGH, MEDIUM, LOW = "HIGH", "MEDIUM", "LOW"
 
 # Explicit "get me a human" — script + romanized, mr/hi/en. Word-ish boundaries.
+# CRITICAL: Sarvam transcribes a Hindi caller saying "senior executive / agent /
+# manager" in DEVANAGARI ("सीनियर एग्ज़िक्यूटिव", "एजेंट"), not Latin. Matching
+# only the Latin forms meant a clear transfer request went undetected, the
+# escalation directive never fired, and the model merely SAID it was connecting
+# the caller without calling transfer_to_senior_executive — so the caller had to
+# ask a second time. The Devanagari transliterations below close that gap.
 _HUMAN_REQUEST = re.compile(
     r"(human|agent|executive|representative|supervisor|manager|senior|"
     r"real person|talk to (a|someone)|customer care person|"
+    r"connect me|transfer me|speak to (a|someone|senior|human)|"
+    # Devanagari transliterations of the English support words
+    r"सीनियर|सिनियर|एग्ज़िक्यूटिव|एग्जीक्यूटिव|एग्ज़ेक्यूटिव|एक्ज़िक्यूटिव|"
+    r"एजेंट|एजंट|ऑफिसर|ऑफ़िसर|अफसर|मैनेजर|मॅनेजर|सुपरवाइजर|सुपरवाइज़र|"
+    # Marathi / Hindi human nouns
     r"माणस|माणूस|माणसाशी|व्यक्ती|अधिकारी|प्रतिनिधी|वरिष्ठ|"
-    r"आदमी|इंसान|व्यक्ति|प्रतिनिधि|बात करा|baat kara|baat karni|"
-    r"kisi se baat|insaan|aadmi)",
+    r"आदमी|इंसान|व्यक्ति|प्रतिनिधि|"
+    # "talk to / connect me" verb phrases (Devanagari + romanized). The suffix
+    # group on 'बात कर' avoids matching 'बात करके' (a narration, not a request).
+    r"बात कर(ा|ना|नी|ाओ|वा|ा दो|ा दीजिए|नी है|ना है)|"
+    r"कॉल (पिला|लगा|करा|करवा)|कनेक्ट कर|"
+    r"baat kara|baat karni|baat karna|kisi se baat|connect kar|"
+    r"insaan|aadmi)",
     re.IGNORECASE)
 
 # Category rules: (compiled keyword pattern) -> (reason, category, priority).

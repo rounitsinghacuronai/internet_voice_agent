@@ -101,6 +101,8 @@ class PersonaContext:
     greeting_personal: str = ""
     apology: dict = field(default_factory=dict)
     silence_nudge: dict = field(default_factory=dict)
+    silence_nudge_midcall: dict = field(default_factory=dict)
+    silence_nudge_number: dict = field(default_factory=dict)
     no_response_closing: dict = field(default_factory=dict)
     emergency_follow: dict = field(default_factory=dict)
     safety_generic: dict = field(default_factory=dict)
@@ -109,6 +111,8 @@ class PersonaContext:
     transfer_intro: dict = field(default_factory=dict)      # warm hand-off + connecting
     transfer_failed: dict = field(default_factory=dict)     # transfer could not complete
     transfer_callback: dict = field(default_factory=dict)   # offer a callback instead
+    # ── number capture: light "noting" acknowledgement ({digits} = running total) ──
+    number_capture_ack: dict = field(default_factory=dict)
 
     # ── recognized-caller opener ─────────────────────────────────────────────
     def personal_greeting(self, first_name: str) -> str:
@@ -207,6 +211,19 @@ def _build(name: str, gender: str, role: str, voice: str) -> PersonaContext:
             "hi": f"हैलो, क्या आप वहाँ हैं? मैं आपकी कैसे मदद {hi_can}?",
             "en": "Hello, are you still there? How may I help you?",
         },
+        # Mid-call nudge — the caller has ALREADY explained their issue, so never
+        # re-ask "how can I help"; just check they're still on the line.
+        silence_nudge_midcall={
+            "mr": "हॅलो, आपण अजून लाइनवर आहात का? मी इथेच आहे.",
+            "hi": "हैलो, क्या आप अभी भी लाइन पर हैं? मैं यहीं हूँ.",
+            "en": "Hello, are you still on the line? I'm right here.",
+        },
+        # Nudge while collecting a number — patient, never naggy.
+        silence_nudge_number={
+            "mr": "मी आत्तापर्यंतचे अंक नोंदवले आहेत. तयार असाल तेव्हा पुढचे अंक सांगा.",
+            "hi": "मैंने अब तक के अंक नोट कर लिए हैं. जब तैयार हों, बाकी अंक बता दीजिए.",
+            "en": "I've noted the digits so far. Please tell me the rest whenever you're ready.",
+        },
         no_response_closing={
             "mr": ("तुमच्याकडून कोणतेही प्रतिउत्तर न आल्यामुळे आपला कॉल डिस्कनेक्ट करण्यात येत आहे. "
                    "सिंकब्रॉड नेटवर्क्समध्ये संपर्क केल्याबद्दल धन्यवाद. आपला दिवस शुभ असो."),
@@ -266,6 +283,12 @@ def _build(name: str, gender: str, role: str, voice: str) -> PersonaContext:
                    "आपको इसी नंबर पर जल्द ही कॉल बैक करेंगे."),
             "en": ("Don't worry — I've saved your full details and our senior executive will "
                    "call you back on this number shortly."),
+        },
+        number_capture_ack={
+            # Human "noting" — repeat the digits captured so far, invite to continue.
+            "mr": "{digits}. हां, पुढे सांगा.",
+            "hi": "{digits}. जी, आगे बताइए.",
+            "en": "{digits}. Got it, please continue.",
         },
     )
 

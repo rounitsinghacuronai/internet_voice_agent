@@ -113,7 +113,9 @@ def test_director_picks_verification_when_asking_for_number():
     d = VoiceDirector()
     p = d.direct(SpeechContext(asking_for_number="account_no", verified=False))
     assert p.name is StyleName.VERIFICATION
-    assert p.number_pace <= 0.8  # slower for numbers
+    # numbers read slower than normal speech, and now at a CONSISTENT pace across
+    # every style (unified so digits never sound "sometimes fast, sometimes slow")
+    assert p.number_pace <= 0.9 and p.number_pace == 0.85
 
 
 def test_director_picks_complaint_registered():

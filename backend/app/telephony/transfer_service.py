@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -31,6 +32,8 @@ from typing import Optional
 import httpx
 
 log = logging.getLogger(__name__)
+
+_PENDING_TTL_S = 120     # a queued transfer is valid this long for Exotel to fetch
 
 
 class TransferStatus(str, Enum):
@@ -84,14 +87,43 @@ class TransferService:
         self.s = settings
         self._client = client
         self._owns_client = client is None
+        # FLOW MODE registry: call_sid → {number, executive, ts}. Set when the AI
+        # escalates; read by the /exotel/transfer-destination endpoint that the
+        # Connect applet fetches. Only escalated calls have an entry, so normal
+        # calls get no number and simply end.
+        self._pending: dict[str, dict] = {}
+
+    # ── flow-mode pending-transfer registry ──────────────────────────────────
+    def _prune(self) -> None:
+        now = time.time()
+        for k in [k for k, v in self._pending.items() if now - v["ts"] > _PENDING_TTL_S]:
+            self._pending.pop(k, None)
+
+    def record_pending(self, call_sid: str, number: str, executive: str,
+                       summary: str = "") -> None:
+        if not call_sid:
+            return
+        self._prune()
+        self._pending[call_sid] = {"number": number, "executive": executive,
+                                   "summary": summary, "ts": time.time()}
+
+    def pending_for(self, call_sid: str) -> Optional[dict]:
+        self._prune()
+        return self._pending.get(call_sid)
 
     # ── configuration introspection ──────────────────────────────────────────
+    def _api_key(self) -> str:
+        return getattr(self.s, "exotel_transfer_api_key", "") or self.s.exotel_api_key
+
+    def _api_token(self) -> str:
+        return getattr(self.s, "exotel_transfer_api_token", "") or self.s.exotel_api_token
+
     @property
     def _creds_ready(self) -> bool:
         s = self.s
         return bool(
             getattr(s, "exotel_transfer_enabled", False)
-            and s.exotel_sid and s.exotel_api_key and s.exotel_api_token
+            and s.exotel_sid and self._api_key() and self._api_token()
             and s.exotel_transfer_number
         )
 
@@ -108,6 +140,26 @@ class TransferService:
             log.info("transfer: feature disabled — not transferring (call=%s)",
                      ctx.session_id)
             return TransferResult(TransferStatus.DISABLED, executive=label)
+
+        # FLOW HAND-OFF (recommended, seamless) — on a real Exotel leg we do NOT
+        # call the click-to-call API (which would re-dial both parties). Instead
+        # the bot ends its stream and Exotel's call flow routes the SAME live
+        # caller to the next applet — a Connect applet dialing the executive.
+        # We just report success; the VoiceSession ending the stream does the work.
+        mode = getattr(self.s, "exotel_transfer_mode", "flow")
+        if (ctx.call_sid and mode == "flow"
+                and getattr(self.s, "exotel_transfer_enabled", False)):
+            # Register this call as escalated so the Connect applet's destination
+            # fetch (/exotel/transfer-destination) returns the executive's number.
+            self.record_pending(ctx.call_sid, self.s.exotel_transfer_number,
+                                label, ctx.summary)
+            log.info("transfer HANDOFF (flow) call=%s → executive=%s (%s) — ending "
+                     "the Voicebot stream; Exotel's Connect applet fetches the "
+                     "number and bridges the live caller (no re-dial)",
+                     ctx.session_id, label, self.s.exotel_transfer_number)
+            return TransferResult(TransferStatus.INITIATED, executive=label,
+                                  reference=f"FLOW-{ctx.session_id[:8]}",
+                                  detail={"mode": "flow"})
 
         # SIMULATION — no creds, or a browser/demo leg with no CallSid. The whole
         # escalation experience still runs; we just log the prepared payload so
@@ -133,10 +185,14 @@ class TransferService:
         real call would send — the single source of truth for the carrier
         contract."""
         s = self.s
+        # Transfer the EXISTING live leg (identified by CallSid) to the executive.
+        # Deliberately NO `From`: sending the caller's number as From makes Exotel
+        # place a brand-new call to them (the "both parties re-dialled" bug).
+        # CallSid + To + CallerId tells Exotel to bridge the caller already on the
+        # line to `To`.
         payload = {
             "CallSid": ctx.call_sid or "",
             "CallType": "trans",
-            "From": ctx.from_number or ctx.caller_number or ctx.mobile or "",
             "To": s.exotel_transfer_number,
             "CallerId": s.exotel_caller_id or s.exotel_transfer_number,
         }
@@ -147,7 +203,7 @@ class TransferService:
     async def _exotel_connect(self, ctx: TransferContext,
                               label: str) -> TransferResult:
         s = self.s
-        url = (f"https://{s.exotel_api_key}:{s.exotel_api_token}"
+        url = (f"https://{self._api_key()}:{self._api_token()}"
                f"@{s.exotel_subdomain}/v1/Accounts/{s.exotel_sid}/Calls/connect.json")
         payload = self._build_payload(ctx)
         client = self._client_or_new()
