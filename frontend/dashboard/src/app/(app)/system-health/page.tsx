@@ -33,8 +33,8 @@ export default function SystemHealthPage() {
 
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
         <KpiCard label="Uptime" value={data ? uptime(data.uptime_seconds) : "—"} icon={Activity} tone="success" />
-        <KpiCard label="CPU" value={data ? `${data.metrics.cpu_percent}%` : "—"} icon={Cpu} />
-        <KpiCard label="Memory" value={data ? `${data.metrics.memory_percent}%` : "—"} icon={MemoryStick} />
+        <KpiCard label="CPU" value={data?.metrics.cpu_percent == null ? "—" : `${data.metrics.cpu_percent}%`} icon={Cpu} />
+        <KpiCard label="Memory" value={data?.metrics.memory_percent == null ? "—" : `${data.metrics.memory_percent}%`} icon={MemoryStick} />
         <KpiCard label="API Errors (24h)" value={data?.metrics.api_errors_24h ?? "—"} icon={TriangleAlert} tone={data?.metrics.api_errors_24h ? "destructive" : "success"} />
       </div>
 

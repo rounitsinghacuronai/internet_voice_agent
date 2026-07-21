@@ -1,15 +1,12 @@
 /**
- * Repository provider — the single place the app resolves which data source to
- * use. Everything else imports `repositories` from here and never touches HTTP
- * or mock details directly.
+ * Repository provider. Single real data source — every page/hook imports
+ * `repositories` from here and talks only to the live FastAPI backend. There is
+ * no mock/sample data in the app.
  */
-import { config } from "@/lib/config";
 import type { Repositories } from "./repositories";
 import { liveRepositories } from "./live/repositories";
-import { mockRepositories } from "./mock/repositories";
 
-export const repositories: Repositories =
-  config.dataSource === "mock" ? mockRepositories : liveRepositories;
+export const repositories: Repositories = liveRepositories;
 
 export type { Repositories } from "./repositories";
 export * from "./types";

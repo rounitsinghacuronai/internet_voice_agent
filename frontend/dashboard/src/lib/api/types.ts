@@ -23,7 +23,14 @@ export interface Ticket {
   created_at: string;
   delivered_at: string | null;
   last_error: string;
-  // enrichment (optional, may be filled by mock repo)
+  // enrichment from the customer join (ticket detail endpoint)
+  receiving_number?: string;
+  address?: string;
+  plan_name?: string;
+  plan_price?: number | null;
+  payment_status?: string;
+  ont_status?: string;
+  // optional fields not stored per-ticket in this build
   assigned_executive?: string;
   region?: string;
   raised_by?: RaisedBy;
@@ -80,25 +87,33 @@ export interface LiveCall {
   stage: CallStage;
 }
 
+export interface TrendPoint {
+  label: string;
+  date?: string;
+  calls: number;
+}
+
 export interface DashboardStats {
   generated_at: string;
   kpis: {
-    todays_calls: number;
+    todays_tickets: number;
     active_calls: number;
     resolved_tickets: number;
     open_tickets: number;
     critical_tickets: number;
     transferred_calls: number;
-    avg_response_time_s: number;
-    avg_resolution_time_min: number;
-    customer_satisfaction: number;
-    ai_resolution_rate: number;
-    human_escalation_rate: number;
-    avg_call_duration_s: number;
+    avg_response_time_s: number | null;
+    avg_resolution_time_min: number | null;
+    customer_satisfaction: number | null;
+    ai_resolution_rate: number | null;
+    human_escalation_rate: number | null;
+    avg_call_duration_s: number | null;
     total_customers: number;
     open_complaints: number;
+    total_tickets: number;
   };
-  language_distribution: { language: string; value: number }[];
+  trend_7d: TrendPoint[];
+  peak_hours: TrendPoint[];
   common_issues: { issue: string; count: number }[];
   recent_complaints: Complaint[];
 }
@@ -114,7 +129,7 @@ export interface SystemHealth {
   generated_at: string;
   uptime_seconds: number;
   components: SystemComponent[];
-  metrics: { cpu_percent: number; memory_percent: number; api_errors_24h: number; streaming: string };
+  metrics: { cpu_percent: number | null; memory_percent: number | null; api_errors_24h: number; streaming: string };
 }
 
 export interface Executive {
@@ -133,26 +148,26 @@ export interface Escalation {
   ticket_id: string;
   reason: string;
   category: string;
-  executive: string;
+  customer_name?: string;
+  mobile?: string;
+  executive?: string;
   transferred_at: string;
-  handoff_seconds: number;
+  handoff_seconds?: number;
   summary: string;
   resolution: string | null;
+  status?: string;
 }
 
 export interface Conversation {
   call_id: string;
+  ticket_id?: string;
   customer_name: string;
   phone: string;
-  language: string;
-  started_at: string;
-  duration_s: number;
   intent: string;
-  sentiment: Sentiment;
-  escalated: boolean;
   summary: string;
-  tokens: number;
-  turns: number;
+  escalated: boolean;
+  started_at: string;
+  complaint_no?: string;
 }
 
 export interface AppNotification {

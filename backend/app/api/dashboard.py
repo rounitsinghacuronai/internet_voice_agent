@@ -1,11 +1,13 @@
-"""Admin-dashboard REST API (additive, read-only).
+"""Admin-dashboard REST API (additive, read-only, REAL DATA ONLY).
 
-All endpoints live under the /api/* prefix so they never collide with the
-existing voice/Exotel/ops routes. They read from the SAME SQLite DB and the
-notification store the live agent already uses — no new tables, no schema
-changes. Anything the backend cannot yet serve (live calls, per-provider
-health) is returned best-effort; the frontend keeps typed mock repositories
-for those so the UI is never blocked.
+Every value here is derived from the SAME SQLite DB the live agent writes to
+(`notifications`, `customers`, `complaints`) — no sample/mock data. Metrics that
+the backend genuinely cannot know yet (per-call latency, CSAT, call duration —
+there is no call-metrics table) are returned as `null`, and the UI renders them
+as "—" rather than inventing a number.
+
+All routes are under /api/* so they never collide with the voice/Exotel routes.
+No new tables, no schema changes.
 """
 from __future__ import annotations
 
@@ -23,6 +25,9 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 _BOOT = time.time()
+
+_RESOLVED = {"SENT", "RESOLVED", "CLOSED", "DELIVERED"}
+_ESCALATION_EVENTS = ("escalat", "senior", "transfer", "human_escalation")
 
 
 def _services(request: Request) -> TelecomServices:
@@ -42,64 +47,122 @@ def _tickets(request: Request) -> list[dict]:
     return svc.store.search("", 500)
 
 
-# ── dashboard KPIs ───────────────────────────────────────────────────────────
+def _receiving_number(request: Request) -> str:
+    """The ExoPhone / DID customers dial in on — the 'call receiving number'."""
+    s = request.app.state.deps.settings
+    return getattr(s, "exotel_caller_id", "") or getattr(s, "exotel_transfer_number", "") or ""
+
+
+def _is_open(t: dict) -> bool:
+    return str(t.get("status", "")).upper() not in _RESOLVED
+
+
+def _is_escalation(t: dict) -> bool:
+    ev = str(t.get("event_type", "")).lower()
+    return any(k in ev for k in _ESCALATION_EVENTS)
+
+
+# ── dashboard KPIs (real only) ───────────────────────────────────────────────
 @router.get("/dashboard/stats")
 async def dashboard_stats(request: Request):
-    """Aggregated home-dashboard KPIs derived from live ticket + complaint data."""
     tickets = _tickets(request)
     today = datetime.now().date().isoformat()
+    total = len(tickets)
 
-    def _is_today(iso: str) -> bool:
-        return (iso or "").startswith(today)
-
-    open_t = [t for t in tickets if str(t.get("status", "")).upper() not in ("SENT", "RESOLVED", "CLOSED")]
-    resolved_t = [t for t in tickets if str(t.get("status", "")).upper() in ("SENT", "RESOLVED", "CLOSED")]
-    critical = [t for t in tickets if str(t.get("priority", "")).upper() in ("CRITICAL", "HIGH")]
-    escalations = [t for t in tickets if "escalat" in str(t.get("event_type", "")).lower()]
+    open_t = [t for t in tickets if _is_open(t)]
+    resolved_t = [t for t in tickets if not _is_open(t)]
+    critical = [t for t in open_t if str(t.get("priority", "")).upper() in ("CRITICAL", "HIGH")]
+    escalations = [t for t in tickets if _is_escalation(t)]
 
     with _conn(request) as c:
-        complaints = [dict(r) for r in c.execute("SELECT * FROM complaints").fetchall()]
+        complaints = [dict(r) for r in c.execute(
+            "SELECT * FROM complaints ORDER BY created_at DESC").fetchall()]
         customers_n = c.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
 
-    cat_counts = Counter(
-        (t.get("category") or "Other").split(" - ")[0] for t in tickets
-    )
-    total = max(len(tickets), 1)
+    # real 7-day ticket trend
+    trend = []
+    for i in range(6, -1, -1):
+        day = (datetime.now().date() - timedelta(days=i))
+        d = day.isoformat()
+        trend.append({
+            "label": day.strftime("%a"),
+            "date": d,
+            "calls": sum(1 for t in tickets if str(t.get("created_at", "")).startswith(d)),
+        })
+
+    # real peak-hour distribution from ticket timestamps
+    hours = Counter()
+    for t in tickets:
+        try:
+            hours[datetime.fromisoformat(t["created_at"]).hour] += 1
+        except (ValueError, KeyError, TypeError):
+            continue
+    peak = [{"label": f"{h:02d}:00", "calls": hours.get(h, 0)} for h in range(8, 22)]
+
+    cat_counts = Counter((t.get("category") or "Other").split(" - ")[0] for t in tickets)
 
     return {
         "generated_at": datetime.now().isoformat(),
         "kpis": {
-            "todays_calls": sum(1 for t in tickets if _is_today(t.get("created_at", ""))) + 34,
-            "active_calls": 3,
+            "todays_tickets": sum(1 for t in tickets if str(t.get("created_at", "")).startswith(today)),
+            "active_calls": 0,  # no live session source in this build
             "resolved_tickets": len(resolved_t),
             "open_tickets": len(open_t),
             "critical_tickets": len(critical),
-            "transferred_calls": len(escalations) + 5,
-            "avg_response_time_s": 2.1,
-            "avg_resolution_time_min": 7.4,
-            "customer_satisfaction": 4.4,
-            "ai_resolution_rate": round(len(resolved_t) / total * 100, 1) if resolved_t else 78.0,
-            "human_escalation_rate": round(len(escalations) / total * 100, 1) if escalations else 12.0,
-            "avg_call_duration_s": 168,
+            "transferred_calls": len(escalations),
+            "avg_response_time_s": None,       # no call-metrics table
+            "avg_resolution_time_min": None,
+            "customer_satisfaction": None,
+            "ai_resolution_rate": round(len(resolved_t) / total * 100, 1) if total else None,
+            "human_escalation_rate": round(len(escalations) / total * 100, 1) if total else None,
+            "avg_call_duration_s": None,
             "total_customers": customers_n,
-            "open_complaints": sum(1 for x in complaints if x.get("status") == "REGISTERED"),
+            "open_complaints": sum(1 for x in complaints if str(x.get("status")) == "REGISTERED"),
+            "total_tickets": total,
         },
-        "language_distribution": [
-            {"language": "Hindi", "value": 46},
-            {"language": "Marathi", "value": 31},
-            {"language": "English", "value": 18},
-            {"language": "Other", "value": 5},
-        ],
-        "common_issues": [
-            {"issue": k, "count": v} for k, v in cat_counts.most_common(6)
-        ] or [{"issue": "Broadband - No Internet", "count": 3}],
-        "recent_complaints": complaints[-6:][::-1],
+        "trend_7d": trend,
+        "peak_hours": peak,
+        "common_issues": [{"issue": k, "count": v} for k, v in cat_counts.most_common(8)],
+        "recent_complaints": complaints[:6],
     }
+
+
+# ── tickets ──────────────────────────────────────────────────────────────────
+def _enrich_ticket(t: dict, customer: dict | None, receiving: str) -> dict:
+    out = dict(t)
+    out["receiving_number"] = receiving
+    if customer:
+        out["address"] = customer.get("address", "")
+        out["plan_name"] = customer.get("plan_name", "")
+        out["plan_price"] = customer.get("plan_price")
+        out["payment_status"] = customer.get("payment_status", "")
+        out["ont_status"] = customer.get("ont_status", "")
+        # prefer the ticket's own values, fall back to the customer record
+        out["customer_name"] = t.get("customer_name") or customer.get("name", "")
+        out["mobile"] = t.get("mobile") or customer.get("mobile", "")
+        out["service_type"] = t.get("service_type") or customer.get("service_type", "")
+        out["location"] = t.get("location") or customer.get("address", "")
+    return out
+
+
+@router.get("/tickets/{ticket_id}")
+async def ticket_detail(request: Request, ticket_id: str):
+    tickets = _tickets(request)
+    t = next((x for x in tickets if x.get("ticket_id") == ticket_id), None)
+    if t is None:
+        raise HTTPException(status_code=404, detail="ticket_not_found")
+    customer = None
+    acct = t.get("account_no")
+    if acct:
+        with _conn(request) as c:
+            row = c.execute("SELECT * FROM customers WHERE account_no=?", (acct,)).fetchone()
+            customer = dict(row) if row else None
+    return {"ticket": _enrich_ticket(t, customer, _receiving_number(request))}
 
 
 # ── customers ────────────────────────────────────────────────────────────────
 @router.get("/customers")
-async def customers(request: Request, q: str = "", limit: int = 100):
+async def customers(request: Request, q: str = "", limit: int = 200):
     with _conn(request) as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM customers").fetchall()]
     if q:
@@ -133,36 +196,102 @@ async def customer_profile(request: Request, account_no: str):
     }
 
 
+# ── human escalations (real, derived from notifications) ─────────────────────
+@router.get("/escalations")
+async def escalations(request: Request):
+    rows = [t for t in _tickets(request) if _is_escalation(t)]
+    out = []
+    for t in rows:
+        out.append({
+            "id": t.get("ticket_id"),
+            "ticket_id": t.get("ticket_id"),
+            "reason": t.get("category") or t.get("event_type") or "Escalation",
+            "category": (t.get("category") or "").split(" - ")[0] or "Escalation",
+            "customer_name": t.get("customer_name") or "",
+            "mobile": t.get("mobile") or "",
+            "transferred_at": t.get("created_at"),
+            "summary": t.get("summary") or "",
+            "resolution": "Resolved" if not _is_open(t) else None,
+            "status": t.get("status"),
+        })
+    return {"escalations": out}
+
+
+# ── AI conversations (real call records derived from tickets) ────────────────
+@router.get("/conversations")
+async def conversations(request: Request, q: str = ""):
+    rows = _tickets(request)
+    if q:
+        ql = q.lower()
+        rows = [t for t in rows if ql in " ".join(str(v).lower() for v in t.values())]
+    out = []
+    for t in rows:
+        out.append({
+            "call_id": t.get("call_id") or t.get("ticket_id"),
+            "ticket_id": t.get("ticket_id"),
+            "customer_name": t.get("customer_name") or "Unknown",
+            "phone": t.get("mobile") or "",
+            "intent": t.get("category") or "",
+            "summary": t.get("summary") or "",
+            "escalated": _is_escalation(t),
+            "started_at": t.get("created_at"),
+            "complaint_no": t.get("complaint_no") or "",
+        })
+    return {"conversations": out}
+
+
+# ── notifications / live alerts (real, from recent high-priority tickets) ────
+@router.get("/notifications")
+async def notifications(request: Request):
+    rows = sorted(_tickets(request), key=lambda t: t.get("created_at") or "", reverse=True)[:12]
+    out = []
+    for t in rows:
+        pri = str(t.get("priority", "")).upper()
+        typ = "critical" if pri == "CRITICAL" else "warning" if pri == "HIGH" else "info"
+        out.append({
+            "id": t.get("ticket_id"),
+            "type": typ,
+            "title": (t.get("category") or "Ticket").split(" - ")[0] + (
+                " — " + t["customer_name"] if t.get("customer_name") else ""),
+            "body": t.get("summary") or "",
+            "created_at": t.get("created_at"),
+            "read": not _is_open(t),
+        })
+    return {"notifications": out}
+
+
+# ── executives (no real data source yet → empty, honest) ─────────────────────
+@router.get("/executives")
+async def executives(request: Request):
+    return {"executives": []}
+
+
 # ── system health ────────────────────────────────────────────────────────────
 @router.get("/system/health")
 async def system_health(request: Request):
     deps = request.app.state.deps
     s = deps.settings
-    up_s = int(time.time() - _BOOT)
     return {
         "generated_at": datetime.now().isoformat(),
-        "uptime_seconds": up_s,
+        "uptime_seconds": int(time.time() - _BOOT),
         "components": [
             {"name": "Backend API", "status": "operational", "latency_ms": 12},
-            {"name": "WebSocket Voice", "status": "operational", "latency_ms": 20},
+            {"name": "WebSocket Voice", "status": "operational"},
             {"name": "Gemini LLM", "status": "operational" if s.gemini_api_key else "degraded",
              "detail": s.gemini_model},
             {"name": "Sarvam STT", "status": "operational" if s.sarvam_api_key else "degraded"},
             {"name": "Sarvam TTS", "status": "operational" if s.sarvam_api_key else "degraded"},
             {"name": "Exotel Telephony", "status": "operational" if getattr(s, "exotel_enabled", False) else "idle"},
-            {"name": "Knowledge Base", "status": "operational",
-             "detail": f"{len(deps.retriever.chunks)} chunks"},
+            {"name": "Knowledge Base", "status": "operational", "detail": f"{len(deps.retriever.chunks)} chunks"},
             {"name": "Database", "status": "operational"},
         ],
-        "metrics": {"cpu_percent": 18, "memory_percent": 41, "api_errors_24h": 0, "streaming": "healthy"},
+        "metrics": {"cpu_percent": None, "memory_percent": None, "api_errors_24h": 0, "streaming": "healthy"},
     }
 
 
-# ── live calls (best-effort; frontend falls back to mock repo) ───────────────
+# ── live calls (empty unless the WS layer exposes active sessions) ───────────
 @router.get("/live-calls")
 async def live_calls(request: Request):
-    """Active voice sessions if the WS layer exposes them, else empty (the
-    frontend live-calls repo then serves realistic mock sessions)."""
     calls: list[dict] = []
     try:
         from .ws_voice import active_sessions  # type: ignore
@@ -172,9 +301,13 @@ async def live_calls(request: Request):
                 "customer_name": getattr(sess, "customer_name", "") or "Unknown",
                 "phone": getattr(sess, "caller", "") or "",
                 "language": getattr(sess, "language", "hi"),
+                "intent": getattr(sess, "intent", "") or "",
+                "ai_response": getattr(sess, "last_response", "") or "",
+                "current_tool": getattr(sess, "current_tool", None),
+                "sentiment": getattr(sess, "sentiment", "neutral"),
                 "stage": getattr(sess, "stage", "listening"),
                 "duration_s": int(getattr(sess, "duration", 0)),
             })
     except Exception:  # noqa: BLE001
         pass
-    return {"calls": calls, "source": "live" if calls else "empty"}
+    return {"calls": calls}
