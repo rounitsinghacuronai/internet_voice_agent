@@ -33,8 +33,12 @@ _TRANSITIONS: dict[CallState, set[CallState]] = {
                           CallState.LISTENING, CallState.NUMBER_CAPTURE},
     CallState.THINKING: {CallState.SPEAKING, CallState.INTERRUPTED, CallState.WAITING_FOR_USER,
                           CallState.LISTENING, CallState.IDLE, CallState.NUMBER_CAPTURE},
+    # THINKING is reachable directly from SPEAKING: a caller can finish an
+    # utterance during the playback-drain window (barge-in), so the next turn
+    # begins generating while we are still nominally SPEAKING. This is a normal
+    # race, not a bug — allow it so it stops logging as ILLEGAL.
     CallState.SPEAKING: {CallState.INTERRUPTED, CallState.WAITING_FOR_USER, CallState.LISTENING,
-                         CallState.IDLE, CallState.NUMBER_CAPTURE},
+                         CallState.IDLE, CallState.NUMBER_CAPTURE, CallState.THINKING},
     CallState.INTERRUPTED: {CallState.LISTENING, CallState.THINKING, CallState.IDLE},
     CallState.WAITING_FOR_USER: {CallState.LISTENING, CallState.THINKING, CallState.IDLE,
                                  CallState.NUMBER_CAPTURE},

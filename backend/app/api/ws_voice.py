@@ -69,6 +69,15 @@ from ..conversation.state import CallState, CallStateMachine
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+# Live sessions keyed by telephony call_sid, so an out-of-band keypad webhook
+# (Exotel Gather/Passthru → /exotel/dtmf) can deliver digits into the right
+# in-progress call. Only Exotel legs (which have a call_sid) are registered.
+_SESSIONS_BY_CALL: dict[str, "VoiceSession"] = {}
+
+
+def session_for_call(call_sid: str) -> "VoiceSession | None":
+    return _SESSIONS_BY_CALL.get(call_sid) if call_sid else None
+
 # Shared thread-pool for CPU-bound audio processing (AGC, spectral gate, AEC,
 # noisereduce).  Running these synchronously in the event loop blocks the WS
 # receiver and makes the mic appear to freeze on longer utterances.
@@ -206,6 +215,11 @@ class VoiceSession:
         caller_mobile = self._caller_mobile()
         self.manager.memory.caller_number = caller_mobile
 
+        # Register for out-of-band keypad delivery (Exotel Gather → /exotel/dtmf).
+        self._call_sid = getattr(self.ws, "call_sid", None)
+        if self._call_sid:
+            _SESSIONS_BY_CALL[self._call_sid] = self
+
         # CALLER-ID RECOGNITION: if the call arrives from a registered mobile
         # (Exotel `from` on the phone leg, or ?from= on the browser demo), look
         # the subscriber up, preload their verified identity, and greet by name.
@@ -257,6 +271,9 @@ class VoiceSession:
             await self._teardown()
 
     async def _teardown(self) -> None:
+        cid = getattr(self, "_call_sid", None)
+        if cid and _SESSIONS_BY_CALL.get(cid) is self:
+            _SESSIONS_BY_CALL.pop(cid, None)
         self.sm.transition(CallState.IDLE, "call_ended")
         for t in (
             self._active_turn_task,
@@ -771,6 +788,18 @@ class VoiceSession:
         else:
             self.sm.transition(CallState.LISTENING, "dtmf_digit")
             await self._send({"type": "state", "value": "listening"})
+
+    async def inject_dtmf(self, digits: str) -> int:
+        """Deliver keypad digits collected out-of-band (Exotel Gather / Passthru
+        webhook → /exotel/dtmf). Each character is fed through the same handler
+        as a streamed keypress, so control keys (*, #) work identically. Returns
+        the count of characters processed."""
+        n = 0
+        for ch in (digits or ""):
+            if ch.strip():
+                await self._on_dtmf(ch)
+                n += 1
+        return n
 
     async def _run_turn_guarded(self, text: str, stt_lang: str) -> None:
         """Thin wrapper for text-mode turns with CancelledError handling."""

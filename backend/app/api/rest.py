@@ -86,6 +86,37 @@ def _exotel_dial_format(number: str) -> str:
     return n
 
 
+@router.api_route("/exotel/dtmf", methods=["GET", "POST"])
+async def exotel_dtmf(request: Request):
+    """Out-of-band keypad delivery for DUAL-INPUT number capture.
+
+    Point an Exotel Gather / Passthru applet here (or any DTMF webhook) with the
+    live CallSid plus the pressed key(s). We match CallSid to the active
+    VoiceSession and inject the digit(s) into its capture buffer — the same path
+    a streamed `dtmf` event takes. This makes the keypad work even when the
+    account's Voicebot streaming applet does not forward inline DTMF.
+
+    Accepts (query or form): CallSid, and either `digits` (a collected string
+    like "9876543210") or `digit` (a single key). '*' and '#' are honoured."""
+    from .ws_voice import session_for_call
+    params: dict = dict(request.query_params)
+    try:
+        form = await request.form()
+        params.update({k: v for k, v in form.items()})
+    except Exception:                                    # noqa: BLE001
+        pass
+    call_sid = (params.get("CallSid") or params.get("call_sid") or "")
+    digits = str(params.get("digits") or params.get("digit")
+                 or params.get("Digits") or "")
+    sess = session_for_call(call_sid)
+    if sess is None:
+        log.info("exotel dtmf webhook: no live session for call_sid=%s", call_sid)
+        return {"ok": False, "reason": "no_active_session"}
+    n = await sess.inject_dtmf(digits)
+    log.info("exotel dtmf webhook: call_sid=%s injected %d digit(s)", call_sid, n)
+    return {"ok": True, "injected": n}
+
+
 @router.api_route("/exotel/transfer-status", methods=["GET", "POST"])
 async def exotel_transfer_status(request: Request):
     """Callback Exotel posts the outcome of a call transfer to (configure as
