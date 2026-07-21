@@ -10,3 +10,13 @@ knowledge/index/
 .pytest_cache/
 *.log
 .DS_Store
+
+# Local agent / editor config
+.claude/
+
+# Node / Next.js (dashboard + whatsapp_bridge)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.env.local

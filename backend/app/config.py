@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     dtmf_enabled: bool = True
     dtmf_submit_key: str = "#"          # caller presses this to say "done"
     dtmf_backspace_key: str = "*"       # delete last digit; twice on empty = restart
+    # When keypad digits arrive but the agent hasn't explicitly named a field,
+    # capture them as this identifier type (10-digit mobile is the common case).
+    dtmf_default_field: str = "mobile"
     # After this much keypad silence with a VALID number buffered, treat it as
     # submitted (caller finished keying and didn't press #).
     dtmf_inter_digit_timeout_ms: int = 4000

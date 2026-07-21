@@ -733,11 +733,23 @@ class VoiceSession:
             return
         memory = self.manager.memory
         if not memory.number_buffer.active:
-            # No number is being collected — a stray keypress. Ignore rather than
-            # guess which identifier the caller means.
-            log.info("session %s: DTMF %r ignored — no active capture",
-                     self.session_id, digit)
-            return
+            # AUTO-ARM: keypad digits must never be dropped just because the
+            # capture buffer wasn't armed yet (the caller often starts keying the
+            # instant they're invited, before arming lands). Only a real DIGIT
+            # arms — a stray '*'/'#' on an idle call is ignored. The identifier
+            # type comes from the agent's last request; failing that, default to
+            # a 10-digit mobile (the overwhelmingly common case here).
+            if digit not in "0123456789":
+                log.info("session %s: DTMF %r ignored — no active capture",
+                         self.session_id, digit)
+                return
+            last_assistant = next(
+                (m["content"] for m in reversed(memory.history)
+                 if m.get("role") == "assistant" and m.get("content")), "")
+            field = (memory.field_requested_by(last_assistant or "")
+                     or getattr(self.s, "dtmf_default_field", "mobile"))
+            memory.start_number_collection(field)
+            log.info("session %s: DTMF auto-armed capture for %r", self.session_id, field)
 
         res = memory.feed_dtmf_digit(
             digit,

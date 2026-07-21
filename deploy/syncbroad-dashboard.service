@@ -1,0 +1,26 @@
+# Reference systemd unit — deploy/deploy_dashboard.sh generates the real one
+# with the correct user/paths. Shown here for review.
+#
+# Serves the built Next.js admin dashboard on 127.0.0.1:3100 (nginx fronts it
+# at internet.acuronai.com/admin).
+
+[Unit]
+Description=Syncbroad Admin Dashboard (Next.js)
+After=network.target syncbroad-internet.service
+Wants=syncbroad-internet.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/syncbroad-internet/frontend/dashboard
+Environment=NODE_ENV=production
+Environment=PORT=3100
+Environment=NEXT_PUBLIC_BASE_PATH=/admin
+Environment=NEXT_PUBLIC_API_BASE=
+Environment=NEXT_PUBLIC_DATA_SOURCE=live
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

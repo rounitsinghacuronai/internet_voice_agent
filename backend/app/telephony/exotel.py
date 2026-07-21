@@ -240,15 +240,25 @@ class ExotelTransport:
             elif event == "dtmf":
                 # Surface keypad presses to the VoiceSession (DUAL-INPUT capture).
                 # Exotel sends one event per key; digit may be 0-9, '*' or '#'.
-                digit = (data.get("dtmf") or {}).get("digit")
-                log.info("exotel dtmf: %s", digit)
+                # Field name varies by build ("digit" vs "digits"), so accept both
+                # and log the raw object to diagnose delivery on live calls.
+                dtmf_obj = data.get("dtmf") or data.get("Dtmf") or {}
+                digit = (dtmf_obj.get("digit") or dtmf_obj.get("digits")
+                         or dtmf_obj.get("Digit"))
+                log.info("exotel DTMF event: raw=%s → digit=%r", dtmf_obj, digit)
                 if digit:
                     return {"type": "dtmf", "digit": str(digit)}
                 continue
             elif event in ("connected", "mark", "clear"):
                 continue
             else:
-                log.debug("exotel: ignoring event %r", event)
+                # Surface any UNKNOWN event at INFO (once-per-type is enough) so a
+                # keypad signal arriving under a non-standard event name is visible
+                # in the server log instead of silently dropped.
+                if event not in getattr(self, "_seen_unknown", set()):
+                    self._seen_unknown = getattr(self, "_seen_unknown", set()) | {event}
+                    log.info("exotel: unhandled event %r payload=%s", event,
+                             {k: v for k, v in data.items() if k != "media"})
                 continue
 
     @staticmethod

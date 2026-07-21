@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .api import rest, ws_voice
+from .api import dashboard, rest, ws_voice
 from .telephony import exotel
 from .audio.vad import load_vad_session
 from .config import Settings, get_settings
@@ -157,6 +157,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(ws_voice.router)
 app.include_router(exotel.router)
 app.include_router(rest.router)
+app.include_router(dashboard.router)  # /api/* admin-dashboard endpoints (additive, read-only)
 
 
 @app.get("/", include_in_schema=False)
