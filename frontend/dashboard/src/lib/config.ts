@@ -21,8 +21,12 @@ export const config = {
   },
   polling: {
     liveCalls: 4_000,
-    dashboard: 30_000,
-    notifications: 15_000,
+    dashboard: 10_000,
+    tickets: 8_000,
+    customers: 15_000,
+    conversations: 10_000,
+    escalations: 10_000,
+    notifications: 10_000,
     systemHealth: 20_000,
   },
 } as const;

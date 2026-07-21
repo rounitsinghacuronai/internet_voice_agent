@@ -125,9 +125,9 @@ export default function TicketsPage() {
                 <TableHead>Priority</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Customer</TableHead>
-                <TableHead>Region</TableHead>
-                <TableHead>Assigned</TableHead>
-                <TableHead>SLA</TableHead>
+                <TableHead>Contact</TableHead>
+                <TableHead>Account</TableHead>
+                <TableHead>Location</TableHead>
                 <TableHead>Created</TableHead>
               </TableRow>
             </TableHeader>
@@ -151,9 +151,9 @@ export default function TicketsPage() {
                       <TableCell><PriorityBadge priority={t.priority} /></TableCell>
                       <TableCell><StatusBadge status={t.status} /></TableCell>
                       <TableCell className="text-sm">{t.customer_name || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{t.region || "—"}</TableCell>
-                      <TableCell className="text-sm">{t.assigned_executive || "Unassigned"}</TableCell>
-                      <TableCell><SlaCell ticket={t} /></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{t.mobile || "—"}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{t.account_no || "—"}</TableCell>
+                      <TableCell className="max-w-[160px] truncate text-sm text-muted-foreground">{t.location || "—"}</TableCell>
                       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(t.created_at)}</TableCell>
                     </TableRow>
                   ))}

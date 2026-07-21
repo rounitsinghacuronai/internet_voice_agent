@@ -138,6 +138,7 @@ def _enrich_ticket(t: dict, customer: dict | None, receiving: str) -> dict:
         out["payment_status"] = customer.get("payment_status", "")
         out["ont_status"] = customer.get("ont_status", "")
         # prefer the ticket's own values, fall back to the customer record
+        out["account_no"] = t.get("account_no") or customer.get("account_no", "")
         out["customer_name"] = t.get("customer_name") or customer.get("name", "")
         out["mobile"] = t.get("mobile") or customer.get("mobile", "")
         out["service_type"] = t.get("service_type") or customer.get("service_type", "")
@@ -152,10 +153,16 @@ async def ticket_detail(request: Request, ticket_id: str):
     if t is None:
         raise HTTPException(status_code=404, detail="ticket_not_found")
     customer = None
-    acct = t.get("account_no")
-    if acct:
-        with _conn(request) as c:
+    acct = (t.get("account_no") or "").strip()
+    mobile = (t.get("mobile") or "").strip()
+    with _conn(request) as c:
+        if acct:
             row = c.execute("SELECT * FROM customers WHERE account_no=?", (acct,)).fetchone()
+            customer = dict(row) if row else None
+        # fall back to matching the caller's mobile (escalation / pre-verify
+        # tickets often have no account number saved)
+        if customer is None and mobile:
+            row = c.execute("SELECT * FROM customers WHERE mobile=?", (mobile,)).fetchone()
             customer = dict(row) if row else None
     return {"ticket": _enrich_ticket(t, customer, _receiving_number(request))}
 
