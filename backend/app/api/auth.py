@@ -34,11 +34,12 @@ _seeded: set[str] = set()
 
 
 # ── secret (stable across restarts) ──────────────────────────────────────────
-def _secret(db_path: Path) -> bytes:
-    env = os.getenv("JWT_SECRET")
-    if env:
-        return env.encode()
-    f = db_path.parent / ".jwt_secret"
+def _secret_for(request: Request) -> bytes:
+    s = request.app.state.deps.settings
+    configured = getattr(s, "jwt_secret", "") or os.getenv("JWT_SECRET", "")
+    if configured:
+        return configured.encode()
+    f = Path(s.db_path).parent / ".jwt_secret"
     try:
         if f.exists():
             return f.read_bytes()
@@ -115,8 +116,9 @@ def _ensure_users(request: Request) -> None:
         if dbp not in _seeded:
             n = c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
             if n == 0:
-                user = os.getenv("ADMIN_USER", "admin")
-                pw = os.getenv("ADMIN_PASS", "admin")
+                s = request.app.state.deps.settings
+                user = getattr(s, "admin_user", "") or os.getenv("ADMIN_USER", "admin")
+                pw = getattr(s, "admin_pass", "") or os.getenv("ADMIN_PASS", "admin")
                 c.execute("INSERT INTO users(username, password_hash, name, role, created_at) VALUES (?,?,?,?,?)",
                           (user, hash_pw(pw), "Administrator", "super_admin", datetime.now().isoformat()))
                 log.warning("auth: seeded default super-admin '%s' (change the password!)", user)
@@ -126,7 +128,7 @@ def _ensure_users(request: Request) -> None:
 # ── dependencies ─────────────────────────────────────────────────────────────
 def require_auth(request: Request, authorization: str = Header(default="")) -> dict:
     token = authorization[7:] if authorization.lower().startswith("bearer ") else authorization
-    secret = _secret(Path(request.app.state.deps.settings.db_path))
+    secret = _secret_for(request)
     claims = verify_token(token, secret) if token else None
     if not claims:
         raise HTTPException(status_code=401, detail="not_authenticated")
@@ -155,7 +157,7 @@ async def login(request: Request, body: LoginIn):
         row = c.execute("SELECT * FROM users WHERE username=?", (body.username,)).fetchone()
     if row is None or not verify_pw(body.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid_credentials")
-    secret = _secret(Path(request.app.state.deps.settings.db_path))
+    secret = _secret_for(request)
     user = {"id": row["id"], "username": row["username"], "name": row["name"], "role": row["role"]}
     return {"token": make_token({"sub": row["username"], **user}, secret), "user": user}
 

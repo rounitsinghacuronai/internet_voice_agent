@@ -308,6 +308,11 @@ class Settings(BaseSettings):
     # optional S3 mirror of the notification audit trail
     notify_s3_bucket: str = ""
 
+    # ── admin dashboard auth (RBAC) ──
+    admin_user: str = "admin"          # seeded super-admin username (first run)
+    admin_pass: str = "admin"          # seeded super-admin password — CHANGE in .env
+    jwt_secret: str = ""               # HS256 signing secret; blank => auto-persisted file
+
     # ── data ──
     db_path: Path = ROOT / "backend" / "telecom.db"
 

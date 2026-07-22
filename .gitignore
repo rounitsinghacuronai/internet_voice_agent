@@ -24,3 +24,6 @@ out/
 # Live runtime data — never overwrite on pull
 backend/telecom.db
 backend/admin_settings.json
+
+# Auto-generated JWT signing secret
+backend/.jwt_secret
