@@ -20,3 +20,7 @@ node_modules/
 out/
 *.tsbuildinfo
 .env.local
+
+# Live runtime data — never overwrite on pull
+backend/telecom.db
+backend/admin_settings.json
