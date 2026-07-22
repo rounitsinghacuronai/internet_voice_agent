@@ -1,5 +1,5 @@
 "use client";
-import { use } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, BadgeCheck, MapPin, Phone, ShieldCheck, Wifi } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,8 +21,9 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function CustomerProfilePage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function CustomerProfilePage() {
+  const params = useParams<{ id: string }>();
+  const id = params.id;
   const { data, isLoading } = useCustomerProfile(id);
 
   if (isLoading) return <Skeleton className="h-96 w-full" />;

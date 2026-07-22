@@ -1,5 +1,6 @@
 "use client";
-import { use, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Bot, Check, Clock, CreditCard, Loader2, MapPin, MessageSquareText, Phone, PhoneIncoming, User, Wifi } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,8 +28,9 @@ function Field({ label, value, icon }: { label: string; value?: string | number 
   );
 }
 
-export default function TicketDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function TicketDetailPage() {
+  const params = useParams<{ id: string }>();
+  const id = params.id;
   const { data: t, isLoading } = useTicket(id);
   const { data: execs } = useExecutives();
   const { setStatus, assign, addNotes } = useTicketActions(id);
