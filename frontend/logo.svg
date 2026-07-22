@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-label="Syncbroad Networks">
+  <defs>
+    <linearGradient id="sb" x1="8" y1="7" x2="30" y2="33" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3BB4E8"/>
+      <stop offset="1" stop-color="#1E88C7"/>
+    </linearGradient>
+  </defs>
+  <path d="M28 13c0-4-4.3-6.2-9-6.2S10 9 10 13.2C10 21 28 17.6 28 25.8c0 4.2-4.3 6.4-9 6.4s-8.9-2.1-9.5-6.4"
+        stroke="url(#sb)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

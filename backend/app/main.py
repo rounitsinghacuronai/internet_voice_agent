@@ -175,6 +175,21 @@ def ops_dashboard():
     return FileResponse(FRONTEND.parent / "ops.html")
 
 
+@app.get("/logo.svg", include_in_schema=False)
+def logo_svg():
+    return FileResponse(FRONTEND.parent / "logo.svg", media_type="image/svg+xml")
+
+
+@app.get("/logo.png", include_in_schema=False)
+def logo_png():
+    """Serves your real raster logo if you drop frontend/logo.png; otherwise
+    falls back to the SVG mark so the brand shows everywhere."""
+    png = FRONTEND.parent / "logo.png"
+    if png.exists():
+        return FileResponse(png, media_type="image/png")
+    return FileResponse(FRONTEND.parent / "logo.svg", media_type="image/svg+xml")
+
+
 def run() -> None:
     import uvicorn
 

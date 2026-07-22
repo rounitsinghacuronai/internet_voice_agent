@@ -10,37 +10,17 @@ import { useState } from "react";
  * (a `public/logo.svg` also works — change the src below). No code changes needed.
  */
 export function LogoMark({ className }: { className?: string }) {
-  const [failed, setFailed] = useState(false);
+  // 0 = try your exact raster (public/logo.png); 1 = SVG recreation (public/logo.svg)
+  const [stage, setStage] = useState(0);
   const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
-
-  if (!failed) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return (
-      <img
-        src={`${base}/logo.png`}
-        alt="Syncbroad Networks"
-        className={className}
-        onError={() => setFailed(true)}
-      />
-    );
-  }
-
-  // Fallback SVG mark (cyan "S" ribbon) — matches the Syncbroad brand colour.
+  const src = stage === 0 ? `${base}/logo.png` : `${base}/logo.svg`;
+  // eslint-disable-next-line @next/next/no-img-element
   return (
-    <svg viewBox="0 0 40 40" className={className} fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-      <defs>
-        <linearGradient id="sb-s" x1="6" y1="6" x2="34" y2="34" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#3BB4E8" />
-          <stop offset="1" stopColor="#1E88C7" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M29 13c0-4-4-6-9-6s-9 2-9 6c0 8 18 4 18 13 0 4-4 6-9 6s-9-2-9-6"
-        stroke="url(#sb-s)"
-        strokeWidth="4.5"
-        strokeLinecap="round"
-        fill="none"
-      />
-    </svg>
+    <img
+      src={src}
+      alt="Syncbroad Networks"
+      className={className}
+      onError={() => setStage((s) => Math.min(s + 1, 1))}
+    />
   );
 }
