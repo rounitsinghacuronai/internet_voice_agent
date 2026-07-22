@@ -146,6 +146,14 @@ def _enrich_ticket(t: dict, customer: dict | None, receiving: str) -> dict:
     return out
 
 
+@router.get("/tickets")
+async def tickets_list(request: Request, q: str = "", limit: int = 200):
+    svc = getattr(request.app.state.deps, "notifications", None)
+    if svc is None:
+        return {"tickets": []}
+    return {"tickets": svc.store.search(q, min(limit, 500))}
+
+
 @router.get("/tickets/{ticket_id}")
 async def ticket_detail(request: Request, ticket_id: str):
     tickets = _tickets(request)
@@ -308,12 +316,23 @@ def _call_store(request: Request):
 
 @router.get("/calls")
 async def calls(request: Request, q: str = "", limit: int = 200):
-    return {"calls": _call_store(request).search(q, min(limit, 500))}
+    rows = _call_store(request).search(q, min(limit, 500))
+    for r in rows:  # keep the list payload light
+        r.pop("transcript", None)
+        r.pop("tools", None)
+    return {"calls": rows}
 
 
 @router.get("/calls/{session_id}")
 async def call_detail(request: Request, session_id: str):
+    import json as _json
     row = _call_store(request).get(session_id)
     if row is None:
         raise HTTPException(status_code=404, detail="call_not_found")
+    for key in ("transcript", "tools"):
+        if isinstance(row.get(key), str):
+            try:
+                row[key] = _json.loads(row[key])
+            except (ValueError, TypeError):
+                row[key] = []
     return {"call": row}

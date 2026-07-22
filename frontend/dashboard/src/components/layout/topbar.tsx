@@ -17,9 +17,10 @@ import {
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ThemeToggle } from "./theme-toggle";
 import { Sidebar } from "./sidebar";
-import { useNotifications } from "@/lib/hooks";
-import { formatRelativeTime } from "@/lib/utils";
+import { useNotifications, useAuthUser } from "@/lib/hooks";
+import { formatRelativeTime, initials } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { clearToken, ROLE_LABELS } from "@/lib/auth";
 
 function GlobalSearch() {
   const router = useRouter();
@@ -78,7 +79,14 @@ function GlobalSearch() {
 
 export function Topbar() {
   const { data: notifications } = useNotifications();
+  const user = useAuthUser();
   const unread = (notifications ?? []).filter((n) => !n.read).length;
+
+  const logout = () => {
+    clearToken();
+    const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    window.location.href = `${base}/login`;
+  };
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur">
@@ -134,22 +142,20 @@ export function Topbar() {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="gap-2 px-2">
               <Avatar>
-                <AvatarFallback>RS</AvatarFallback>
+                <AvatarFallback>{initials(user?.name || user?.username || "?")}</AvatarFallback>
               </Avatar>
               <div className="hidden text-left leading-tight sm:block">
-                <div className="text-sm font-medium">Rounit Singh</div>
-                <div className="text-[11px] text-muted-foreground">Super Admin</div>
+                <div className="text-sm font-medium">{user?.name || user?.username || "—"}</div>
+                <div className="text-[11px] text-muted-foreground">{user ? ROLE_LABELS[user.role] : ""}</div>
               </div>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuLabel>My account</DropdownMenuLabel>
+            <DropdownMenuLabel>{user?.name || user?.username || "My account"}</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Profile</DropdownMenuItem>
-            <DropdownMenuItem>Role &amp; permissions</DropdownMenuItem>
-            <DropdownMenuItem>Preferences</DropdownMenuItem>
+            <DropdownMenuItem disabled className="text-xs">Role: {user ? ROLE_LABELS[user.role] : "—"}</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive">Sign out</DropdownMenuItem>
+            <DropdownMenuItem className="text-destructive" onClick={logout}>Sign out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

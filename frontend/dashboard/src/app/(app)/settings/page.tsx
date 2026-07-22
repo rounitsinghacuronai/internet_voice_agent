@@ -1,14 +1,55 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Building2, Check, Loader2, Palette, ShieldCheck, Volume2 } from "lucide-react";
+import { Building2, Check, Loader2, Palette, ShieldCheck, Trash2, UserCog, Volume2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/shared/page-header";
-import { useSettings, useSaveSettings } from "@/lib/hooks";
+import { useSettings, useSaveSettings, useAuthUser, useUsers, useUserMutations } from "@/lib/hooks";
 import type { AdminSettings } from "@/lib/api/types";
+import { can, ROLE_LABELS, type Role } from "@/lib/auth";
+
+const ROLE_KEYS: Role[] = ["viewer", "executive", "supervisor", "admin", "super_admin"];
+
+function UserManagement() {
+  const { data: users } = useUsers(true);
+  const { create, remove } = useUserMutations();
+  const [f, setF] = useState({ username: "", password: "", name: "", role: "viewer" });
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader><CardTitle className="flex items-center gap-2 text-base"><UserCog className="h-4 w-4 text-primary" /> User Management</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end">
+          <div className="flex-1"><label className="text-xs text-muted-foreground">Username</label><Input value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} /></div>
+          <div className="flex-1"><label className="text-xs text-muted-foreground">Name</label><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+          <div className="flex-1"><label className="text-xs text-muted-foreground">Password</label><Input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
+          <div className="w-40"><label className="text-xs text-muted-foreground">Role</label>
+            <Select value={f.role} onValueChange={(v) => setF({ ...f, role: v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{ROLE_KEYS.map((r) => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <Button disabled={create.isPending || !f.username || !f.password} onClick={() => create.mutate(f, { onSuccess: () => setF({ username: "", password: "", name: "", role: "viewer" }) })}>Add user</Button>
+        </div>
+        {create.isError && <p className="text-xs text-destructive">{(create.error as Error).message}</p>}
+        <div className="space-y-1">
+          {(users ?? []).map((u) => (
+            <div key={u.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+              <div className="text-sm"><span className="font-medium">{u.name || u.username}</span> <span className="text-muted-foreground">@{u.username}</span></div>
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">{ROLE_LABELS[u.role as Role] ?? u.role}</Badge>
+                <Button variant="ghost" size="icon" onClick={() => remove.mutate(u.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -25,6 +66,9 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 export default function SettingsPage() {
   const { data } = useSettings();
   const save = useSaveSettings();
+  const user = useAuthUser();
+  const canWrite = can(user?.role, "settings:write");
+  const canUsers = can(user?.role, "users:manage");
   const [form, setForm] = useState<AdminSettings | null>(null);
   useEffect(() => { if (data && !form) setForm(data); }, [data, form]);
 
@@ -37,10 +81,14 @@ export default function SettingsPage() {
         title="Settings"
         description="Company, branding, voice behaviour — persisted and applied to the live agent."
         actions={
-          <Button onClick={() => save.mutate(form)} disabled={save.isPending} className="gap-2">
-            {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : save.isSuccess ? <Check className="h-4 w-4" /> : null}
-            {save.isSuccess ? "Saved" : "Save changes"}
-          </Button>
+          canWrite ? (
+            <Button onClick={() => save.mutate(form)} disabled={save.isPending} className="gap-2">
+              {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : save.isSuccess ? <Check className="h-4 w-4" /> : null}
+              {save.isSuccess ? "Saved" : "Save changes"}
+            </Button>
+          ) : (
+            <Badge variant="secondary">Read-only for your role</Badge>
+          )
         }
       />
 
@@ -92,6 +140,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {canUsers && <UserManagement />}
       </div>
     </>
   );

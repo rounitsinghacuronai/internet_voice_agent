@@ -328,13 +328,21 @@ class VoiceSession:
             from ..call_log import get_call_log
             dur = int(time.monotonic() - getattr(self, "_started_mono", time.monotonic()))
             snap = self.manager.memory.snapshot()
-            escalated = bool(snap.get("escalated") or snap.get("transferred"))
+            history = list(getattr(self.manager.memory, "history", []) or [])
+            tools = list(getattr(self.manager, "_tools_used", []) or [])
+            lat_hist = getattr(self, "_lat_history", []) or []
+            totals = [x.get("total") for x in lat_hist if isinstance(x, dict) and x.get("total")]
+            avg_latency = int(sum(totals) / len(totals)) if totals else None
+            escalated = bool(snap.get("escalated") or snap.get("transferred")
+                             or "transfer_to_senior_executive" in tools
+                             or "transfer_to_human" in tools)
+            first_user = next((h.get("content", "") for h in history if h.get("role") == "user"), "")
             get_call_log(self.s).end(
                 self.session_id, dur, snap,
                 outcome="escalated" if escalated else "completed",
                 escalated=escalated,
-                intent=snap.get("intent") or "",
-                turns=len(getattr(self, "_lat_history", []) or []))
+                intent=(first_user[:120] if first_user else ""),
+                transcript=history, tools=tools, avg_latency_ms=avg_latency)
         except Exception:  # noqa: BLE001
             pass
         self.sm.transition(CallState.IDLE, "call_ended")

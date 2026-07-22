@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader, EmptyState } from "@/components/shared/page-header";
-import { useExecutives, useExecutiveMutations } from "@/lib/hooks";
+import { useExecutives, useExecutiveMutations, useAuthUser } from "@/lib/hooks";
 import { initials, cn } from "@/lib/utils";
+import { can } from "@/lib/auth";
 
 const STATUS = { available: "bg-success", busy: "bg-warning", offline: "bg-muted-foreground" } as const;
 const ROLES = ["Super Admin", "Admin", "Supervisor", "Executive", "Viewer"];
@@ -17,6 +18,8 @@ const ROLES = ["Super Admin", "Admin", "Supervisor", "Executive", "Viewer"];
 export default function ExecutivesPage() {
   const { data: execs, isLoading } = useExecutives();
   const { create, update, remove } = useExecutiveMutations();
+  const user = useAuthUser();
+  const canManage = can(user?.role, "exec:manage");
   const [form, setForm] = useState({ name: "", phone: "", email: "", role: "Executive", status: "available" as const });
   const rows = execs ?? [];
 
@@ -29,6 +32,7 @@ export default function ExecutivesPage() {
     <>
       <PageHeader title="Executive Panel" description="Manage your support team — add, edit availability, assign to tickets." />
 
+      {canManage && (
       <Card className="mb-6">
         <CardContent className="p-4">
           <div className="flex flex-col gap-2 md:flex-row md:items-end">
@@ -47,6 +51,7 @@ export default function ExecutivesPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {!isLoading && rows.length === 0 ? (
         <EmptyState icon={<UserPlus className="h-6 w-6" />} title="No executives yet" description="Add your first team member using the form above." />
@@ -64,24 +69,28 @@ export default function ExecutivesPage() {
                     <p className="font-semibold">{e.name}</p>
                     <p className="text-xs text-muted-foreground">{e.role}</p>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => remove.mutate(e.id)} aria-label="Remove">
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {canManage && (
+                    <Button variant="ghost" size="icon" onClick={() => remove.mutate(e.id)} aria-label="Remove">
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
                 </div>
                 <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                   {e.phone && <p>{e.phone}</p>}
                   {e.email && <p>{e.email}</p>}
                 </div>
-                <div className="mt-3">
-                  <Select value={e.status} onValueChange={(v) => update.mutate({ id: e.id, e: { name: e.name, phone: e.phone, email: e.email, role: e.role, status: v as typeof e.status } })}>
-                    <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="available">Available</SelectItem>
-                      <SelectItem value="busy">On Call</SelectItem>
-                      <SelectItem value="offline">Offline</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                {canManage && (
+                  <div className="mt-3">
+                    <Select value={e.status} onValueChange={(v) => update.mutate({ id: e.id, e: { name: e.name, phone: e.phone, email: e.email, role: e.role, status: v as typeof e.status } })}>
+                      <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="available">Available</SelectItem>
+                        <SelectItem value="busy">On Call</SelectItem>
+                        <SelectItem value="offline">Offline</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <Badge className={cn("mt-3 gap-1", e.status === "available" ? "bg-success/15 text-success" : e.status === "busy" ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground")}>
                   <span className={cn("h-1.5 w-1.5 rounded-full", STATUS[e.status] ?? "bg-muted-foreground")} />
                   {e.status}

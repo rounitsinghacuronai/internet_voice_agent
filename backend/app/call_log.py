@@ -8,12 +8,31 @@ sqlite errors.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+_NEG = ("not working", "no internet", "nahi", "नहीं", "problem", "complaint", "angry",
+        "worst", "pathetic", "cheat", "fraud", "बंद", "खराब", "slow", "issue", "down")
+_POS = ("thank", "thanks", "dhanyavaad", "धन्यवाद", "good", "great", "resolved", "happy", "perfect")
+
+
+def infer_sentiment(history: list[dict]) -> str:
+    """Naive keyword sentiment over the caller's utterances (honest heuristic)."""
+    text = " ".join(h.get("content", "") for h in history if h.get("role") == "user").lower()
+    if not text:
+        return "neutral"
+    neg = sum(text.count(w) for w in _NEG)
+    pos = sum(text.count(w) for w in _POS)
+    if neg > pos and neg >= 1:
+        return "negative"
+    if pos > neg and pos >= 1:
+        return "positive"
+    return "neutral"
 
 _STORES: dict[str, "CallLogStore"] = {}
 
@@ -49,10 +68,19 @@ class CallLogStore:
                   verified INTEGER DEFAULT 0,
                   intent TEXT, outcome TEXT, escalated INTEGER DEFAULT 0,
                   summary TEXT, turns INTEGER DEFAULT 0,
+                  sentiment TEXT, avg_latency_ms INTEGER,
+                  tools TEXT, transcript TEXT,
                   started_at TEXT, ended_at TEXT, duration_s INTEGER DEFAULT 0);
                 CREATE INDEX IF NOT EXISTS idx_calls_started
                   ON calls(started_at DESC);
                 """)
+            # additive columns for DBs created before transcript support
+            for col in ("sentiment TEXT", "avg_latency_ms INTEGER", "tools TEXT", "transcript TEXT"):
+                try:
+                    with self._conn() as c2:
+                        c2.execute(f"ALTER TABLE calls ADD COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass
         except sqlite3.Error as e:  # pragma: no cover
             log.warning("call_log init failed: %s", e)
 
@@ -72,20 +100,35 @@ class CallLogStore:
 
     def end(self, session_id: str, duration_s: int, snap: dict | None = None,
             outcome: str = "completed", escalated: bool = False,
-            intent: str = "", summary: str = "", turns: int = 0) -> None:
+            intent: str = "", summary: str = "", turns: int = 0,
+            transcript: list[dict] | None = None, tools: list | None = None,
+            avg_latency_ms: int | None = None) -> None:
         snap = snap or {}
+        history = transcript or []
+        sentiment = infer_sentiment(history)
+        # summary fallback: last assistant line (kept short)
+        if not summary:
+            for h in reversed(history):
+                if h.get("role") == "assistant" and h.get("content"):
+                    summary = str(h["content"])[:280]
+                    break
         try:
             with self._conn() as c:
                 c.execute("""
                   UPDATE calls SET
                     ended_at=?, duration_s=?, language=?, customer_name=?,
                     account_no=?, verified=?, outcome=?, escalated=?,
-                    intent=?, summary=?, turns=?
+                    intent=?, summary=?, turns=?, sentiment=?, avg_latency_ms=?,
+                    tools=?, transcript=?
                   WHERE session_id=?
                 """, (datetime.now().isoformat(), int(duration_s),
                       snap.get("language") or "", snap.get("name") or "",
                       snap.get("account_no") or "", 1 if snap.get("verified") else 0,
-                      outcome, 1 if escalated else 0, intent, summary, turns,
+                      outcome, 1 if escalated else 0, intent, summary,
+                      turns or len(history), sentiment,
+                      int(avg_latency_ms) if avg_latency_ms else None,
+                      json.dumps(tools or [], ensure_ascii=False),
+                      json.dumps(history, ensure_ascii=False),
                       session_id))
         except sqlite3.Error as e:  # pragma: no cover
             log.warning("call_log end failed: %s", e)

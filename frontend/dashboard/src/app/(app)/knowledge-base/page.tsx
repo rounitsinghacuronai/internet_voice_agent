@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/page-header";
-import { useKbSearch, useKbReload, useSystemHealth } from "@/lib/hooks";
+import { useKbSearch, useKbReload, useSystemHealth, useAuthUser } from "@/lib/hooks";
+import { can } from "@/lib/auth";
 
 const CATEGORIES = ["FAQs", "Plans", "Broadband", "SIM", "Billing", "Policies", "Troubleshooting"];
 
@@ -20,6 +21,8 @@ export default function KnowledgeBasePage() {
   const { data: results, isFetching } = useKbSearch(q);
   const reload = useKbReload();
   const { data: health } = useSystemHealth();
+  const user = useAuthUser();
+  const canReload = can(user?.role, "kb:reload");
   const kbComp = health?.components.find((c) => c.name === "Knowledge Base");
 
   return (
@@ -28,10 +31,12 @@ export default function KnowledgeBasePage() {
         title="Knowledge Base"
         description="Grounding content the AI retrieves from. Search runs against the live index."
         actions={
-          <Button variant="outline" className="gap-2" onClick={() => reload.mutate()} disabled={reload.isPending}>
-            {reload.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {reload.isSuccess ? `Reloaded (${reload.data?.chunks})` : "Reload index"}
-          </Button>
+          canReload ? (
+            <Button variant="outline" className="gap-2" onClick={() => reload.mutate()} disabled={reload.isPending}>
+              {reload.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {reload.isSuccess ? `Reloaded (${reload.data?.chunks})` : "Reload index"}
+            </Button>
+          ) : null
         }
       />
 

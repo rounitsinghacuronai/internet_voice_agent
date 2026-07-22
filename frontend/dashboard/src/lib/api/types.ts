@@ -184,6 +184,10 @@ export interface CallRecord {
   escalated: number;
   summary: string;
   turns: number;
+  sentiment?: string;
+  avg_latency_ms?: number | null;
+  tools?: string[];
+  transcript?: { role: string; content: string }[];
   started_at: string;
   ended_at: string | null;
   duration_s: number;
@@ -217,6 +221,19 @@ export interface ExecutiveRecord {
   role: string;
   status: "available" | "busy" | "offline";
   created_at?: string;
+}
+
+export interface UserRecord {
+  id: number;
+  username: string;
+  name: string;
+  role: string;
+  created_at?: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: { id?: number; username: string; name: string; role: string };
 }
 
 export interface KbResult {

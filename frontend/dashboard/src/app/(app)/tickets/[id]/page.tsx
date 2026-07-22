@@ -10,8 +10,9 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PriorityBadge, StatusBadge } from "@/components/shared/badges";
-import { useTicket, useTicketActions, useExecutives } from "@/lib/hooks";
+import { useTicket, useTicketActions, useExecutives, useAuthUser } from "@/lib/hooks";
 import { formatDateTime, inr } from "@/lib/utils";
+import { can } from "@/lib/auth";
 
 const STATUS_OPTIONS = ["OPEN", "PENDING", "SENT", "RESOLVED", "CLOSED"];
 
@@ -30,6 +31,8 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
   const { data: t, isLoading } = useTicket(id);
   const { data: execs } = useExecutives();
   const { setStatus, assign, addNotes } = useTicketActions(id);
+  const user = useAuthUser();
+  const canWrite = can(user?.role, "ticket:write");
   const [notes, setNotes] = useState("");
   useEffect(() => { if (t?.resolution_notes) setNotes(t.resolution_notes); }, [t?.resolution_notes]);
 
@@ -54,10 +57,12 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
               </div>
               <p className="mt-1 text-sm text-muted-foreground">{t.category}</p>
             </div>
-            <Button onClick={() => setStatus.mutate("RESOLVED")} disabled={setStatus.isPending}>
-              {setStatus.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              Mark Resolved
-            </Button>
+            {canWrite && (
+              <Button onClick={() => setStatus.mutate("RESOLVED")} disabled={setStatus.isPending}>
+                {setStatus.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Mark Resolved
+              </Button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -107,36 +112,38 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
             </Card>
 
             <div className="space-y-4">
-              {/* Actions — all wired to the backend */}
-              <Card>
-                <CardHeader><CardTitle className="text-base">Actions</CardTitle></CardHeader>
-                <CardContent className="space-y-3">
-                  <div>
-                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Status</p>
-                    <Select value={t.status?.toUpperCase()} onValueChange={(v) => setStatus.mutate(v)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Assigned Executive</p>
-                    <Select value={t.assigned_executive || ""} onValueChange={(v) => assign.mutate(v)}>
-                      <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                      <SelectContent>
-                        {(execs ?? []).length === 0 && <SelectItem value="—" disabled>No executives — add in Executives</SelectItem>}
-                        {(execs ?? []).map((e) => <SelectItem key={e.id} value={e.name}>{e.name} · {e.role}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Resolution Notes</p>
-                    <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Add notes…" />
-                    <Button size="sm" className="mt-2 w-full" onClick={() => addNotes.mutate(notes)} disabled={addNotes.isPending}>
-                      {addNotes.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save notes
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              {/* Actions — all wired to the backend, gated by role */}
+              {canWrite && (
+                <Card>
+                  <CardHeader><CardTitle className="text-base">Actions</CardTitle></CardHeader>
+                  <CardContent className="space-y-3">
+                    <div>
+                      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Status</p>
+                      <Select value={t.status?.toUpperCase()} onValueChange={(v) => setStatus.mutate(v)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Assigned Executive</p>
+                      <Select value={t.assigned_executive || ""} onValueChange={(v) => assign.mutate(v)}>
+                        <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                        <SelectContent>
+                          {(execs ?? []).length === 0 && <SelectItem value="—" disabled>No executives — add in Executives</SelectItem>}
+                          {(execs ?? []).map((e) => <SelectItem key={e.id} value={e.name}>{e.name} · {e.role}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Resolution Notes</p>
+                      <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Add notes…" />
+                      <Button size="sm" className="mt-2 w-full" onClick={() => addNotes.mutate(notes)} disabled={addNotes.isPending}>
+                        {addNotes.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save notes
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardHeader><CardTitle className="text-base">Classification</CardTitle></CardHeader>

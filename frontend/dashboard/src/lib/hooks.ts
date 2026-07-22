@@ -1,9 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { repositories } from "@/lib/api";
 import type { TicketQuery } from "@/lib/api/repositories";
 import type { AdminSettings, ExecutiveRecord } from "@/lib/api/types";
+import { decodeUser } from "@/lib/auth";
 import { config } from "@/lib/config";
 
 export function useDashboardStats() {
@@ -142,6 +144,34 @@ export function useKbSearch(q: string) {
 
 export function useKbReload() {
   return useMutation({ mutationFn: () => repositories.kb.reload() });
+}
+
+// ── auth / users ─────────────────────────────────────────────────────────────
+export function useLogin() {
+  return useMutation({
+    mutationFn: ({ username, password }: { username: string; password: string }) =>
+      repositories.auth.login(username, password),
+  });
+}
+
+export function useUsers(enabled: boolean) {
+  return useQuery({ queryKey: ["users"], queryFn: () => repositories.auth.listUsers(), enabled });
+}
+
+export function useUserMutations() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["users"] });
+  return {
+    create: useMutation({ mutationFn: (u: { username: string; password: string; name: string; role: string }) => repositories.auth.createUser(u), onSuccess: invalidate }),
+    remove: useMutation({ mutationFn: (id: number) => repositories.auth.deleteUser(id), onSuccess: invalidate }),
+  };
+}
+
+// client-only current-user hook (avoids SSR/localStorage hydration mismatch)
+export function useAuthUser() {
+  const [user, setUser] = useState<ReturnType<typeof decodeUser>>(null);
+  useEffect(() => setUser(decodeUser()), []);
+  return user;
 }
 
 export function useEscalations() {

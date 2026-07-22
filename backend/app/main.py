@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .api import admin, dashboard, rest, ws_voice
+from .api import admin, auth, dashboard, rest, ws_voice
 from .telephony import exotel
 from .audio.vad import load_vad_session
 from .config import Settings, get_settings
@@ -156,9 +156,13 @@ app = FastAPI(title="Syncbroad Networks Voice", version="1.0", lifespan=lifespan
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(ws_voice.router)
 app.include_router(exotel.router)
+from fastapi import Depends
+
 app.include_router(rest.router)
-app.include_router(dashboard.router)  # /api/* admin-dashboard endpoints (additive, read-only)
-app.include_router(admin.router)      # /api/* admin write endpoints (tickets, settings, executives, search)
+app.include_router(auth.router)       # /api/auth/* — login/me/users (OPEN: login must be reachable)
+# /api/* dashboard + admin endpoints require a valid JWT (writes add role checks).
+app.include_router(dashboard.router, dependencies=[Depends(auth.require_auth)])
+app.include_router(admin.router, dependencies=[Depends(auth.require_auth)])
 
 
 @app.get("/", include_in_schema=False)

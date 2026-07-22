@@ -19,9 +19,11 @@ import type {
   ExecutiveRecord,
   KbResult,
   LiveCall,
+  LoginResponse,
   SearchResult,
   SystemHealth,
   Ticket,
+  UserRecord,
 } from "./types";
 
 export interface TicketQuery {
@@ -61,6 +63,13 @@ export interface SearchRepository {
 export interface KbRepository {
   search(q: string): Promise<KbResult[]>;
   reload(): Promise<{ reloaded: boolean; chunks: number }>;
+}
+
+export interface AuthRepository {
+  login(username: string, password: string): Promise<LoginResponse>;
+  listUsers(): Promise<UserRecord[]>;
+  createUser(u: { username: string; password: string; name: string; role: string }): Promise<UserRecord>;
+  deleteUser(id: number): Promise<void>;
 }
 
 export interface CustomerRepository {
@@ -109,4 +118,5 @@ export interface Repositories {
   settings: SettingsRepository;
   search: SearchRepository;
   kb: KbRepository;
+  auth: AuthRepository;
 }

@@ -12,11 +12,18 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from .auth import require_role
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["admin"])
+
+# role gates (low → high): viewer < executive < supervisor < admin < super_admin
+_EXECUTIVE = require_role("executive")
+_SUPERVISOR = require_role("supervisor")
+_ADMIN = require_role("admin")
 
 
 def _db(request: Request) -> Path:
@@ -68,17 +75,17 @@ def _update_ticket(request: Request, ticket_id: str, field: str, value: str) -> 
 
 
 @router.post("/tickets/{ticket_id}/status")
-async def set_status(request: Request, ticket_id: str, body: StatusIn):
+async def set_status(request: Request, ticket_id: str, body: StatusIn, _=Depends(_EXECUTIVE)):
     return {"ticket": _update_ticket(request, ticket_id, "status", body.status.upper())}
 
 
 @router.post("/tickets/{ticket_id}/assign")
-async def assign(request: Request, ticket_id: str, body: AssignIn):
+async def assign(request: Request, ticket_id: str, body: AssignIn, _=Depends(_EXECUTIVE)):
     return {"ticket": _update_ticket(request, ticket_id, "assigned_executive", body.executive)}
 
 
 @router.post("/tickets/{ticket_id}/notes")
-async def notes(request: Request, ticket_id: str, body: NotesIn):
+async def notes(request: Request, ticket_id: str, body: NotesIn, _=Depends(_EXECUTIVE)):
     return {"ticket": _update_ticket(request, ticket_id, "resolution_notes", body.notes)}
 
 
@@ -119,7 +126,7 @@ async def get_settings(request: Request):
 
 
 @router.post("/settings")
-async def save_settings(request: Request, body: dict):
+async def save_settings(request: Request, body: dict, _=Depends(_ADMIN)):
     p = _settings_path(request)
     current = dict(_DEFAULT_SETTINGS)
     if p.exists():
@@ -164,7 +171,7 @@ async def list_execs(request: Request):
 
 
 @router.post("/executives")
-async def create_exec(request: Request, body: ExecIn):
+async def create_exec(request: Request, body: ExecIn, _=Depends(_SUPERVISOR)):
     with _conn(request) as c:
         _ensure_schema(c)
         cur = c.execute(
@@ -175,7 +182,7 @@ async def create_exec(request: Request, body: ExecIn):
 
 
 @router.put("/executives/{exec_id}")
-async def update_exec(request: Request, exec_id: int, body: ExecIn):
+async def update_exec(request: Request, exec_id: int, body: ExecIn, _=Depends(_SUPERVISOR)):
     with _conn(request) as c:
         _ensure_schema(c)
         cur = c.execute(
@@ -188,11 +195,18 @@ async def update_exec(request: Request, exec_id: int, body: ExecIn):
 
 
 @router.delete("/executives/{exec_id}")
-async def delete_exec(request: Request, exec_id: int):
+async def delete_exec(request: Request, exec_id: int, _=Depends(_SUPERVISOR)):
     with _conn(request) as c:
         _ensure_schema(c)
         c.execute("DELETE FROM executives WHERE id=?", (exec_id,))
     return {"deleted": True}
+
+
+# ── knowledge base reload (supervisor+) ──────────────────────────────────────
+@router.post("/kb/reload")
+async def kb_reload(request: Request, _=Depends(_SUPERVISOR)):
+    await request.app.state.deps.retriever.build()
+    return {"reloaded": True, "chunks": len(request.app.state.deps.retriever.chunks)}
 
 
 # ── global search ────────────────────────────────────────────────────────────

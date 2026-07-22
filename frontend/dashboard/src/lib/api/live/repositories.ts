@@ -18,9 +18,11 @@ import type {
   ExecutiveRecord,
   KbResult,
   LiveCall,
+  LoginResponse,
   SearchResult,
   SystemHealth,
   Ticket,
+  UserRecord,
 } from "../types";
 
 function applyTicketFilters(list: Ticket[], query?: TicketQuery): Ticket[] {
@@ -38,7 +40,7 @@ export const liveRepositories: Repositories = {
 
   tickets: {
     async list(query?: TicketQuery) {
-      const { tickets } = await apiGet<{ tickets: Ticket[] }>("/tickets", {
+      const { tickets } = await apiGet<{ tickets: Ticket[] }>("/api/tickets", {
         q: query?.q,
         limit: query?.limit ?? 200,
       });
@@ -163,6 +165,22 @@ export const liveRepositories: Repositories = {
     async list() {
       const { notifications } = await apiGet<{ notifications: AppNotification[] }>("/api/notifications");
       return notifications;
+    },
+  },
+
+  auth: {
+    login: (username: string, password: string) =>
+      apiSend<LoginResponse>("POST", "/api/auth/login", { username, password }),
+    async listUsers() {
+      const { users } = await apiGet<{ users: UserRecord[] }>("/api/auth/users");
+      return users;
+    },
+    async createUser(u) {
+      const { user } = await apiSend<{ user: UserRecord }>("POST", "/api/auth/users", u);
+      return user;
+    },
+    async deleteUser(id: number) {
+      await apiSend("DELETE", `/api/auth/users/${id}`);
     },
   },
 };
