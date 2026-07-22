@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Download, Search, SlidersHorizontal } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,7 @@ function exportCsv(rows: Ticket[]) {
 }
 
 export default function TicketsPage() {
+  const router = useRouter();
   const [rawSearch, setRawSearch] = useState("");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
@@ -141,9 +143,9 @@ export default function TicketsPage() {
                     </TableRow>
                   ))
                 : rows.map((t) => (
-                    <TableRow key={t.ticket_id} className="cursor-pointer">
+                    <TableRow key={t.ticket_id} className="cursor-pointer" onClick={() => router.push(`/tickets/${t.ticket_id}`)}>
                       <TableCell>
-                        <Link href={`/tickets/${t.ticket_id}`} className="font-mono text-xs font-semibold text-primary hover:underline">
+                        <Link href={`/tickets/${t.ticket_id}`} onClick={(e) => e.stopPropagation()} className="font-mono text-xs font-semibold text-primary hover:underline">
                           {t.ticket_id}
                         </Link>
                       </TableCell>

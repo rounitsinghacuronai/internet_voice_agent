@@ -1,7 +1,7 @@
 "use client";
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Clock, CreditCard, Loader2, MapPin, Phone, PhoneIncoming, User, Wifi } from "lucide-react";
+import { ArrowLeft, Bot, Check, Clock, CreditCard, Loader2, MapPin, MessageSquareText, Phone, PhoneIncoming, User, Wifi } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -10,9 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PriorityBadge, StatusBadge } from "@/components/shared/badges";
-import { useTicket, useTicketActions, useExecutives, useAuthUser } from "@/lib/hooks";
-import { formatDateTime, inr } from "@/lib/utils";
+import { useTicket, useTicketActions, useExecutives, useAuthUser, useCall } from "@/lib/hooks";
+import { formatDateTime, formatDuration, inr, cn } from "@/lib/utils";
 import { can } from "@/lib/auth";
+import { SentimentDot } from "@/components/shared/badges";
 
 const STATUS_OPTIONS = ["OPEN", "PENDING", "SENT", "RESOLVED", "CLOSED"];
 
@@ -33,6 +34,7 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
   const { setStatus, assign, addNotes } = useTicketActions(id);
   const user = useAuthUser();
   const canWrite = can(user?.role, "ticket:write");
+  const { data: call } = useCall(t?.call_id ?? "");
   const [notes, setNotes] = useState("");
   useEffect(() => { if (t?.resolution_notes) setNotes(t.resolution_notes); }, [t?.resolution_notes]);
 
@@ -66,7 +68,8 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
+            <div className="space-y-4 lg:col-span-2">
+            <Card>
               <CardHeader><CardTitle>Issue</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <p className="rounded-lg bg-muted/40 p-4 text-sm leading-relaxed">{t.summary || "No summary available."}</p>
@@ -110,6 +113,51 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
                 )}
               </CardContent>
             </Card>
+
+            {/* Full conversation + AI summary from the linked call */}
+            <Card>
+              <CardHeader className="flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2"><MessageSquareText className="h-4 w-4 text-primary" /> Conversation &amp; Summary</CardTitle>
+                {call?.sentiment && <SentimentDot sentiment={call.sentiment} />}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-lg bg-muted/40 p-4 text-sm leading-relaxed">
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">AI Summary</p>
+                  {call?.summary || t.summary || "No summary recorded for this call."}
+                </div>
+
+                {call && (
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {call.duration_s ? <Badge variant="secondary">Duration {formatDuration(call.duration_s)}</Badge> : null}
+                    {call.language ? <Badge variant="secondary">{call.language}</Badge> : null}
+                    {call.avg_latency_ms ? <Badge variant="secondary">{call.avg_latency_ms} ms avg</Badge> : null}
+                    {call.turns ? <Badge variant="secondary">{call.turns} turns</Badge> : null}
+                    {(call.tools ?? []).map((tool, i) => <Badge key={i} variant="outline" className="font-mono text-[11px]">{tool}</Badge>)}
+                  </div>
+                )}
+
+                <div>
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Full Transcript</p>
+                  {!call && <p className="text-sm text-muted-foreground">No call record linked to this ticket.</p>}
+                  {call && (call.transcript ?? []).length === 0 && (
+                    <p className="text-sm text-muted-foreground">Transcript not captured for this call.</p>
+                  )}
+                  <div className="space-y-3">
+                    {(call?.transcript ?? []).map((m, i) => (
+                      <div key={i} className={cn("flex gap-2", m.role === "user" ? "" : "flex-row-reverse")}>
+                        <div className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full", m.role === "user" ? "bg-muted" : "bg-primary/15 text-primary")}>
+                          {m.role === "user" ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                        </div>
+                        <div className={cn("max-w-[80%] rounded-2xl px-3 py-2 text-sm", m.role === "user" ? "bg-muted" : "bg-primary/10")}>
+                          {m.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            </div>
 
             <div className="space-y-4">
               {/* Actions — all wired to the backend, gated by role */}

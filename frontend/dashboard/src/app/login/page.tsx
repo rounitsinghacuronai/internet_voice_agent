@@ -1,10 +1,11 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, Loader2, Lock, User } from "lucide-react";
+import { Loader2, Lock, User } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { LogoMark } from "@/components/layout/logo";
 import { useLogin } from "@/lib/hooks";
 import { setToken } from "@/lib/auth";
 import { config } from "@/lib/config";
@@ -32,8 +33,8 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-3 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg">
-            <Building2 className="h-6 w-6" />
+          <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white p-1.5 shadow-sm">
+            <LogoMark className="h-full w-full object-contain" />
           </div>
           <div>
             <h1 className="text-xl font-bold">{config.brand.name}</h1>

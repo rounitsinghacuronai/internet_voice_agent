@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { brandIcon, navSections } from "./nav";
+import { navSections } from "./nav";
+import { LogoMark } from "./logo";
 import { cn } from "@/lib/utils";
 import { config } from "@/lib/config";
 import { useTickets, useLiveCalls } from "@/lib/hooks";
@@ -28,13 +29,12 @@ function SidebarBadge({ kind }: { kind: "critical" | "live" }) {
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
-  const BrandIcon = brandIcon;
 
   return (
     <aside className="flex h-full w-64 flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex h-16 items-center gap-3 px-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg">
-          <BrandIcon className="h-5 w-5" />
+        <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-white p-1 shadow-sm">
+          <LogoMark className="h-full w-full object-contain" />
         </div>
         <div className="leading-tight">
           <div className="text-sm font-bold">{config.brand.shortName}</div>
