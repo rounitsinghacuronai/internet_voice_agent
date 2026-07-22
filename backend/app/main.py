@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .api import dashboard, rest, ws_voice
+from .api import admin, dashboard, rest, ws_voice
 from .telephony import exotel
 from .audio.vad import load_vad_session
 from .config import Settings, get_settings
@@ -158,6 +158,7 @@ app.include_router(ws_voice.router)
 app.include_router(exotel.router)
 app.include_router(rest.router)
 app.include_router(dashboard.router)  # /api/* admin-dashboard endpoints (additive, read-only)
+app.include_router(admin.router)      # /api/* admin write endpoints (tickets, settings, executives, search)
 
 
 @app.get("/", include_in_schema=False)

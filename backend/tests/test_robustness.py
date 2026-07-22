@@ -58,3 +58,29 @@ def test_topic_directive_present_once_active():
     topic = TopicStability()
     topic.update("signal nahi aa raha hai")
     assert "network" in topic.directive()
+
+
+def test_new_connection_intent_not_read_as_broken_internet():
+    """A caller ORDERING service names broadband/fiber/wifi/router — these must
+    NOT be classified as an existing-service internet FAULT (which injected an
+    out-of-context 'sorry your wifi isn't working' troubleshooting directive)."""
+    from backend.app.conversation.robustness import detect_topic
+    assert detect_topic("I want to take a new broadband connection") == "new_connection"
+    assert detect_topic("a new fiber connection please") == "new_connection"
+    # bare product noun without a fault cue is NOT an internet-trouble topic
+    assert detect_topic("is a wifi router included") != "internet"
+    assert detect_topic("which fiber plans do you have") != "internet"
+    # a genuine fault still routes to internet
+    assert detect_topic("my internet not working since morning") == "internet"
+    assert detect_topic("wifi is very slow today") == "internet"
+
+
+def test_new_connection_topic_stays_locked_through_product_talk():
+    """Full call flow: the active topic must remain new_connection while the
+    caller discusses fiber plans / wifi router — never flip to an internet fault."""
+    topic = TopicStability()
+    for u in ["hi I want a new connection", "yes for broadband at home",
+              "which fiber plans do you have", "is the wifi router included",
+              "how soon can you install it"]:
+        topic.update(u)
+    assert topic.active == "new_connection"

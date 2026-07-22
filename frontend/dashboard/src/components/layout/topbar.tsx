@@ -1,7 +1,10 @@
 "use client";
-import { Bell, Menu, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Bell, Menu, Search, Ticket, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useSearch } from "@/lib/hooks";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -17,6 +20,61 @@ import { Sidebar } from "./sidebar";
 import { useNotifications } from "@/lib/hooks";
 import { formatRelativeTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+
+function GlobalSearch() {
+  const router = useRouter();
+  const [raw, setRaw] = useState("");
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const t = setTimeout(() => setQ(raw), 250);
+    return () => clearTimeout(t);
+  }, [raw]);
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+  const { data: results, isFetching } = useSearch(q);
+
+  return (
+    <div ref={boxRef} className="relative hidden max-w-md flex-1 md:block">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        value={raw}
+        onChange={(e) => { setRaw(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder="Search customers, tickets, phone…"
+        className="pl-9"
+        aria-label="Global search"
+      />
+      {open && q.trim().length >= 2 && (
+        <div className="absolute left-0 right-0 top-11 z-50 overflow-hidden rounded-lg border border-border bg-popover shadow-lg">
+          {isFetching && <div className="px-3 py-3 text-sm text-muted-foreground">Searching…</div>}
+          {!isFetching && (results ?? []).length === 0 && <div className="px-3 py-3 text-sm text-muted-foreground">No results.</div>}
+          {(results ?? []).map((r, i) => (
+            <button
+              key={i}
+              onClick={() => { setOpen(false); setRaw(""); router.push(r.href); }}
+              className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-accent"
+            >
+              <span className={r.type === "ticket" ? "text-warning" : "text-primary"}>
+                {r.type === "ticket" ? <Ticket className="h-4 w-4" /> : <User className="h-4 w-4" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{r.title}</span>
+                <span className="block truncate text-xs text-muted-foreground">{r.subtitle}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Topbar() {
   const { data: notifications } = useNotifications();
@@ -35,14 +93,7 @@ export function Topbar() {
         </SheetContent>
       </Sheet>
 
-      <div className="relative hidden max-w-md flex-1 md:block">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search customers, tickets, phone, complaint ID…"
-          className="pl-9"
-          aria-label="Global search"
-        />
-      </div>
+      <GlobalSearch />
 
       <div className="ml-auto flex items-center gap-1">
         <ThemeToggle />

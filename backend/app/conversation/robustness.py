@@ -106,15 +106,48 @@ def estimate_confidence(
 # strength of a single ambiguous word that might be background noise (a TV,
 # another person in the room) bleeding into the transcript.
 
+# NEW-CONNECTION / SALES INTENT — checked FIRST, before the product-noun
+# buckets below. A caller ORDERING service naturally says "broadband", "fiber",
+# "wifi", "router" while describing what they want; without this priority they
+# were mis-bucketed as an existing customer whose "internet" is BROKEN, and the
+# agent then injected a troubleshooting/"sorry your wifi isn't working" empathy
+# directive that is completely out of context for someone requesting a NEW line.
+_NEW_CONNECTION_CUES: tuple[str, ...] = (
+    "new connection", "नवीन कनेक्शन", "नया कनेक्शन", "naya connection", "navin connection",
+    "new broadband", "new fiber", "new wifi", "new line", "naya broadband", "naya fiber",
+    "want a connection", "need a connection", "want a new", "take a connection",
+    "get a connection", "connection chahiye", "connection lena", "connection lagwa",
+    "connection हवं", "connection हवे", "कनेक्शन हवं", "कनेक्शन पाहिजे", "कनेक्शन चाहिए",
+    "new plan for a", "install a new", "application status", "apply for",
+    "installation", "इन्स्टॉलेशन", "इंस्टालेशन",
+)
+
+# FAULT / TROUBLE cues. The internet & network buckets only fire when one of
+# these is present alongside a product noun — a bare product noun on its own is
+# NOT a service fault (it's usually a new-connection or plan enquiry).
+_FAULT_CUES: tuple[str, ...] = (
+    "not working", "nahi chal", "nahi aa", "band", "बंद", "slow", "down",
+    "खराब", "problem", "issue", "complaint", "dead", "no internet", "not connecting",
+    "disconnect", "drop", "red light", "लाल", "los", "चालत नाही", "नाही येत", "काम नाही",
+    "speed kam", "स्पीड", "काम नहीं", "नहीं चल", "बंद पड", "खराब झाल",
+)
+
+# Explicit internet-fault phrases (already encode the problem — no extra cue needed).
+_INTERNET_FAULT_PHRASES: tuple[str, ...] = (
+    "internet nahi", "internet not working", "net nahi chal", "नेट चालत नाही",
+    "नेट नहीं चल", "red light", "लाल लाइट", "los", "slow internet", "speed kam",
+    "स्पीड", "disconnect ho", "no internet",
+)
+_INTERNET_PRODUCT: tuple[str, ...] = (
+    "wifi", "वायफाय", "वाईफाई", "broadband", "ब्रॉडबँड", "ब्रॉडबैंड",
+    "fiber", "फायबर", "router", "राउटर", "राऊटर",
+)
+
 _TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
     "network": ("no network", "network nahi", "network गया", "नेटवर्क नाही", "नेटवर्क नहीं",
-                "signal nahi", "no signal", "सिग्नल", "call drop", "कॉल ड्रॉप", "call cut",
-                "tower", "टॉवर", "roaming", "रोमिंग", "volte", "sms nahi", "data not working",
+                "signal nahi", "no signal", "call drop", "कॉल ड्रॉप", "call cut",
+                "roaming", "रोमिंग", "sms nahi", "data not working",
                 "data nahi chal", "internet slow on phone"),
-    "internet": ("internet nahi", "internet not working", "net nahi chal", "नेट चालत नाही",
-                 "नेट नहीं चल", "wifi", "वायफाय", "वाईफाई", "broadband", "ब्रॉडबँड",
-                 "ब्रॉडबैंड", "fiber", "फायबर", "router", "राउटर", "राऊटर", "red light",
-                 "लाल लाइट", "los", "slow internet", "speed kam", "स्पीड", "disconnect ho"),
     "billing": ("bill", "बिल", "बिलाची", "recharge", "रिचार्ज", "payment", "पेमेंट",
                 "बिल भरणे", "balance", "बॅलन्स", "बैलेंस", "refund", "रिफंड", "plan",
                 "प्लॅन", "प्लान", "pack", "पॅक", "पैक"),
@@ -122,13 +155,27 @@ _TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
             "sim band", "sim block", "नवीन सिम", "नया सिम"),
     "complaint_status": ("complaint status", "track complaint", "ticket number", "शिकायत",
                           "तक्रार क्रमांक", "ticket no", "तिकीट"),
-    "new_connection": ("new connection", "नवीन कनेक्शन", "नया कनेक्शन", "application status",
-                       "installation", "इन्स्टॉलेशन", "इंस्टालेशन"),
 }
 
 
 def detect_topic(text: str) -> str | None:
     low = text.lower()
+
+    # 1. New-connection / sales intent wins over the product-noun buckets, so a
+    #    caller ordering broadband/fiber/wifi is never read as a broken-service call.
+    if any(c in low for c in _NEW_CONNECTION_CUES):
+        return "new_connection"
+
+    # 2. Internet TROUBLE — an explicit fault phrase, or a product noun paired
+    #    with a generic fault cue. A bare "broadband"/"wifi"/"fiber"/"router"
+    #    (no fault word) is deliberately NOT a topic here; it stays with the
+    #    active topic (typically new_connection) instead of flipping to a fault.
+    if any(p in low for p in _INTERNET_FAULT_PHRASES) or (
+        any(p in low for p in _INTERNET_PRODUCT) and any(f in low for f in _FAULT_CUES)
+    ):
+        return "internet"
+
+    # 3. Remaining buckets (each already phrased as an issue/action).
     for topic, keywords in _TOPIC_KEYWORDS.items():
         if any(k in low for k in keywords):
             return topic
@@ -173,5 +220,9 @@ class TopicStability:
             "transcript seems unrelated (e.g. a TV, radio, or another person's voice bleeding "
             "into the call), ignore it rather than switching topics — only follow the caller "
             "to a new topic if their own statement is clearly and deliberately about something "
-            "else, not a single stray word."
+            "else, not a single stray word. Do NOT call a tool for a DIFFERENT subject than "
+            "this topic (e.g. never pull up a bill, plan, or network status while helping with "
+            f"'{self.active}') unless the caller has clearly and explicitly asked for it. When "
+            "an utterance is short, garbled, or ambiguous, ask them to repeat WITHIN this "
+            "topic — never guess a new intent and never switch tasks or tools on it."
         )

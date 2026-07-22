@@ -258,9 +258,13 @@ class Settings(BaseSettings):
     verify_ttl_s: int = 1800           # hard verify-gate window
     llm_timeout_s: float = 30.0
     # History cap (messages, not turns — sentences commit individually). 20
-    # messages ≈ 5–8 conversational turns of context: ample for a support call,
-    # and every message beyond that adds input tokens → LLM TTFT. Was 40→24→20.
-    history_max_turns: int = 20
+    # messages of context. 20 was too tight — because each assistant SENTENCE is
+    # its own message, 20 messages is only ~4-6 real exchanges, so a paused or
+    # long call (silence prompts + a few garbled STT turns) evicted the caller's
+    # original request and any details already collected ("forgets context on a
+    # pause"). 32 retains a full new-connection/number-capture flow across pauses
+    # at a modest token cost. Was 40→24→20→32.
+    history_max_turns: int = 32
     # FIRST-AUDIO FLUSH: while nothing has been spoken yet this turn, a long
     # run-on first sentence is split at a comma once the buffer reaches this
     # many chars (instead of the normal 160) so TTS starts sooner. Only the

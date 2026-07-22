@@ -74,9 +74,45 @@ router = APIRouter()
 # in-progress call. Only Exotel legs (which have a call_sid) are registered.
 _SESSIONS_BY_CALL: dict[str, "VoiceSession"] = {}
 
+# ALL live sessions keyed by session_id (browser + phone), so the admin
+# dashboard's Live Call Monitor can observe calls in progress. Purely
+# read-only; populated/cleared in run()/_teardown().
+_SESSIONS_BY_ID: dict[str, "VoiceSession"] = {}
+
+_STAGE_MAP = {
+    "idle": "listening", "listening": "listening", "thinking": "thinking",
+    "speaking": "speaking", "interrupted": "listening",
+    "waiting_for_user": "listening", "number_capture": "listening",
+}
+
 
 def session_for_call(call_sid: str) -> "VoiceSession | None":
     return _SESSIONS_BY_CALL.get(call_sid) if call_sid else None
+
+
+def active_sessions() -> list[dict]:
+    """Read-only snapshot of in-progress calls for the admin dashboard."""
+    out: list[dict] = []
+    for sid, sess in list(_SESSIONS_BY_ID.items()):
+        try:
+            snap = sess.manager.memory.snapshot()
+            state = getattr(getattr(sess.sm, "state", None), "value", "listening")
+            started = getattr(sess, "_started_mono", None)
+            out.append({
+                "call_id": sid,
+                "customer_name": snap.get("name") or "Unknown",
+                "phone": snap.get("caller_number") or "",
+                "language": snap.get("language") or "und",
+                "intent": snap.get("intent") or "",
+                "ai_response": "",
+                "current_tool": None,
+                "sentiment": "neutral",
+                "stage": _STAGE_MAP.get(str(state), "listening"),
+                "duration_s": int(time.monotonic() - started) if started else 0,
+            })
+        except Exception:  # noqa: BLE001 — never let observability break
+            continue
+    return out
 
 # Shared thread-pool for CPU-bound audio processing (AGC, spectral gate, AEC,
 # noisereduce).  Running these synchronously in the event loop blocks the WS
@@ -220,6 +256,17 @@ class VoiceSession:
         if self._call_sid:
             _SESSIONS_BY_CALL[self._call_sid] = self
 
+        # Live-call observability + per-call log (both fail-safe: never break a call).
+        self._started_mono = time.monotonic()
+        _SESSIONS_BY_ID[self.session_id] = self
+        try:
+            from ..call_log import get_call_log
+            get_call_log(self.s).start(
+                self.session_id, self._call_sid, caller_mobile,
+                getattr(self.s, "exotel_caller_id", "") or "")
+        except Exception:  # noqa: BLE001
+            pass
+
         # CALLER-ID RECOGNITION: if the call arrives from a registered mobile
         # (Exotel `from` on the phone leg, or ?from= on the browser demo), look
         # the subscriber up, preload their verified identity, and greet by name.
@@ -274,6 +321,22 @@ class VoiceSession:
         cid = getattr(self, "_call_sid", None)
         if cid and _SESSIONS_BY_CALL.get(cid) is self:
             _SESSIONS_BY_CALL.pop(cid, None)
+
+        # Finalize the call-log row + drop from the live registry (fail-safe).
+        _SESSIONS_BY_ID.pop(self.session_id, None)
+        try:
+            from ..call_log import get_call_log
+            dur = int(time.monotonic() - getattr(self, "_started_mono", time.monotonic()))
+            snap = self.manager.memory.snapshot()
+            escalated = bool(snap.get("escalated") or snap.get("transferred"))
+            get_call_log(self.s).end(
+                self.session_id, dur, snap,
+                outcome="escalated" if escalated else "completed",
+                escalated=escalated,
+                intent=snap.get("intent") or "",
+                turns=len(getattr(self, "_lat_history", []) or []))
+        except Exception:  # noqa: BLE001
+            pass
         self.sm.transition(CallState.IDLE, "call_ended")
         for t in (
             self._active_turn_task,

@@ -3,17 +3,22 @@
  * FastAPI backend; there is no mock/sample data anywhere. Domains with no data
  * yet return empty arrays, and the UI shows honest empty states.
  */
-import { apiGet } from "../http";
+import { apiGet, apiSend } from "../http";
 import type { Repositories, TicketQuery } from "../repositories";
 import type {
+  AdminSettings,
   AppNotification,
+  CallRecord,
   Conversation,
   Customer,
   CustomerProfile,
   DashboardStats,
   Escalation,
   Executive,
+  ExecutiveRecord,
+  KbResult,
   LiveCall,
+  SearchResult,
   SystemHealth,
   Ticket,
 } from "../types";
@@ -47,6 +52,78 @@ export const liveRepositories: Repositories = {
         return null;
       }
     },
+    async setStatus(id: string, status: string) {
+      const { ticket } = await apiSend<{ ticket: Ticket }>("POST", `/api/tickets/${id}/status`, { status });
+      return ticket;
+    },
+    async assign(id: string, executive: string) {
+      const { ticket } = await apiSend<{ ticket: Ticket }>("POST", `/api/tickets/${id}/assign`, { executive });
+      return ticket;
+    },
+    async addNotes(id: string, notes: string) {
+      const { ticket } = await apiSend<{ ticket: Ticket }>("POST", `/api/tickets/${id}/notes`, { notes });
+      return ticket;
+    },
+  },
+
+  calls: {
+    async list(q?: string) {
+      const { calls } = await apiGet<{ calls: CallRecord[] }>("/api/calls", { q });
+      return calls;
+    },
+    async get(id: string) {
+      try {
+        const { call } = await apiGet<{ call: CallRecord }>(`/api/calls/${id}`);
+        return call;
+      } catch {
+        return null;
+      }
+    },
+  },
+
+  settings: {
+    async get() {
+      const { settings } = await apiGet<{ settings: AdminSettings }>("/api/settings");
+      return settings;
+    },
+    async save(patch: Partial<AdminSettings>) {
+      const { settings } = await apiSend<{ settings: AdminSettings }>("POST", "/api/settings", patch);
+      return settings;
+    },
+  },
+
+  search: {
+    async query(q: string) {
+      const { results } = await apiGet<{ results: SearchResult[] }>("/api/search", { q });
+      return results;
+    },
+  },
+
+  kb: {
+    async search(q: string) {
+      const res = await apiGet<KbResult[] | { results?: KbResult[]; chunks?: KbResult[] }>("/kb/search", { q });
+      if (Array.isArray(res)) return res;
+      return res.results ?? res.chunks ?? [];
+    },
+    reload: () => apiSend<{ reloaded: boolean; chunks: number }>("POST", "/kb/reload"),
+  },
+
+  executivesAdmin: {
+    async list() {
+      const { executives } = await apiGet<{ executives: ExecutiveRecord[] }>("/api/executives");
+      return executives;
+    },
+    async create(e) {
+      const { executive } = await apiSend<{ executive: ExecutiveRecord }>("POST", "/api/executives", e);
+      return executive;
+    },
+    async update(id, e) {
+      const { executive } = await apiSend<{ executive: ExecutiveRecord }>("PUT", `/api/executives/${id}`, e);
+      return executive;
+    },
+    async remove(id) {
+      await apiSend("DELETE", `/api/executives/${id}`);
+    },
   },
 
   customers: {
@@ -66,13 +143,6 @@ export const liveRepositories: Repositories = {
 
   system: {
     health: () => apiGet<SystemHealth>("/api/system/health"),
-  },
-
-  executives: {
-    async list() {
-      const { executives } = await apiGet<{ executives: Executive[] }>("/api/executives");
-      return executives;
-    },
   },
 
   escalations: {

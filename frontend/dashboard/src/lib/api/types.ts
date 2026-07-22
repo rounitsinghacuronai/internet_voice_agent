@@ -170,6 +170,63 @@ export interface Conversation {
   complaint_no?: string;
 }
 
+export interface CallRecord {
+  session_id: string;
+  call_sid: string;
+  caller: string;
+  receiving_number: string;
+  language: string;
+  customer_name: string;
+  account_no: string;
+  verified: number;
+  intent: string;
+  outcome: string;
+  escalated: number;
+  summary: string;
+  turns: number;
+  started_at: string;
+  ended_at: string | null;
+  duration_s: number;
+}
+
+export interface SearchResult {
+  type: "customer" | "ticket" | "call";
+  title: string;
+  subtitle: string;
+  href: string;
+}
+
+export interface AdminSettings {
+  company_name: string;
+  brand_color: string;
+  business_hours: string;
+  languages: string[];
+  executive_transfer_number: string;
+  voice_pace: number;
+  prompt_version: string;
+  kb_version: string;
+  barge_in: boolean;
+  dark_mode_default: boolean;
+}
+
+export interface ExecutiveRecord {
+  id: number;
+  name: string;
+  phone: string;
+  email: string;
+  role: string;
+  status: "available" | "busy" | "offline";
+  created_at?: string;
+}
+
+export interface KbResult {
+  text?: string;
+  score?: number;
+  category?: string;
+  title?: string;
+  [k: string]: unknown;
+}
+
 export interface AppNotification {
   id: string;
   type: "critical" | "warning" | "info";

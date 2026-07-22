@@ -267,12 +267,6 @@ async def notifications(request: Request):
     return {"notifications": out}
 
 
-# ── executives (no real data source yet → empty, honest) ─────────────────────
-@router.get("/executives")
-async def executives(request: Request):
-    return {"executives": []}
-
-
 # ── system health ────────────────────────────────────────────────────────────
 @router.get("/system/health")
 async def system_health(request: Request):
@@ -296,25 +290,30 @@ async def system_health(request: Request):
     }
 
 
-# ── live calls (empty unless the WS layer exposes active sessions) ───────────
+# ── live calls (real, from the voice agent's active-session registry) ────────
 @router.get("/live-calls")
 async def live_calls(request: Request):
-    calls: list[dict] = []
     try:
         from .ws_voice import active_sessions  # type: ignore
-        for sid, sess in (active_sessions() or {}).items():
-            calls.append({
-                "call_id": sid,
-                "customer_name": getattr(sess, "customer_name", "") or "Unknown",
-                "phone": getattr(sess, "caller", "") or "",
-                "language": getattr(sess, "language", "hi"),
-                "intent": getattr(sess, "intent", "") or "",
-                "ai_response": getattr(sess, "last_response", "") or "",
-                "current_tool": getattr(sess, "current_tool", None),
-                "sentiment": getattr(sess, "sentiment", "neutral"),
-                "stage": getattr(sess, "stage", "listening"),
-                "duration_s": int(getattr(sess, "duration", 0)),
-            })
+        return {"calls": active_sessions()}
     except Exception:  # noqa: BLE001
-        pass
-    return {"calls": calls}
+        return {"calls": []}
+
+
+# ── call log (every call the agent handled) ──────────────────────────────────
+def _call_store(request: Request):
+    from ..call_log import get_call_log
+    return get_call_log(request.app.state.deps.settings)
+
+
+@router.get("/calls")
+async def calls(request: Request, q: str = "", limit: int = 200):
+    return {"calls": _call_store(request).search(q, min(limit, 500))}
+
+
+@router.get("/calls/{session_id}")
+async def call_detail(request: Request, session_id: str):
+    row = _call_store(request).get(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="call_not_found")
+    return {"call": row}

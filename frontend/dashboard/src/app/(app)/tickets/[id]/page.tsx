@@ -1,15 +1,19 @@
 "use client";
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Clock, CreditCard, MapPin, Phone, PhoneIncoming, User, Wifi } from "lucide-react";
+import { ArrowLeft, Check, Clock, CreditCard, Loader2, MapPin, Phone, PhoneIncoming, User, Wifi } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PriorityBadge, StatusBadge } from "@/components/shared/badges";
-import { useTicket } from "@/lib/hooks";
+import { useTicket, useTicketActions, useExecutives } from "@/lib/hooks";
 import { formatDateTime, inr } from "@/lib/utils";
+
+const STATUS_OPTIONS = ["OPEN", "PENDING", "SENT", "RESOLVED", "CLOSED"];
 
 function Field({ label, value, icon }: { label: string; value?: string | number | null; icon?: React.ReactNode }) {
   const shown = value === undefined || value === null || value === "" ? "—" : value;
@@ -24,6 +28,10 @@ function Field({ label, value, icon }: { label: string; value?: string | number 
 export default function TicketDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data: t, isLoading } = useTicket(id);
+  const { data: execs } = useExecutives();
+  const { setStatus, assign, addNotes } = useTicketActions(id);
+  const [notes, setNotes] = useState("");
+  useEffect(() => { if (t?.resolution_notes) setNotes(t.resolution_notes); }, [t?.resolution_notes]);
 
   return (
     <>
@@ -46,14 +54,13 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
               </div>
               <p className="mt-1 text-sm text-muted-foreground">{t.category}</p>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline">Reassign</Button>
-              <Button>Resolve</Button>
-            </div>
+            <Button onClick={() => setStatus.mutate("RESOLVED")} disabled={setStatus.isPending}>
+              {setStatus.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Mark Resolved
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            {/* Issue + customer + contact + plan — everything about the ticket */}
             <Card className="lg:col-span-2">
               <CardHeader><CardTitle>Issue</CardTitle></CardHeader>
               <CardContent className="space-y-4">
@@ -100,13 +107,43 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
             </Card>
 
             <div className="space-y-4">
+              {/* Actions — all wired to the backend */}
+              <Card>
+                <CardHeader><CardTitle className="text-base">Actions</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Status</p>
+                    <Select value={t.status?.toUpperCase()} onValueChange={(v) => setStatus.mutate(v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{STATUS_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Assigned Executive</p>
+                    <Select value={t.assigned_executive || ""} onValueChange={(v) => assign.mutate(v)}>
+                      <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                      <SelectContent>
+                        {(execs ?? []).length === 0 && <SelectItem value="—" disabled>No executives — add in Executives</SelectItem>}
+                        {(execs ?? []).map((e) => <SelectItem key={e.id} value={e.name}>{e.name} · {e.role}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Resolution Notes</p>
+                    <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Add notes…" />
+                    <Button size="sm" className="mt-2 w-full" onClick={() => addNotes.mutate(notes)} disabled={addNotes.isPending}>
+                      {addNotes.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Save notes
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader><CardTitle className="text-base">Classification</CardTitle></CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Category</span><span className="font-medium">{t.category || "—"}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Priority</span><PriorityBadge priority={t.priority} /></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Status</span><StatusBadge status={t.status} /></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Raised by</span><Badge variant="secondary">{t.event_type?.includes("human") ? "Human" : "AI"}</Badge></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Call ID</span><span className="font-mono text-xs">{t.call_id || "—"}</span></div>
                 </CardContent>
               </Card>
 
@@ -125,16 +162,6 @@ export default function TicketDetailPage({ params }: { params: Promise<{ id: str
                       <span className="ml-auto font-medium">{formatDateTime(t.delivered_at)}</span>
                     </div>
                   )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader><CardTitle className="text-base">Delivery</CardTitle></CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Attempts</span><span className="font-medium">{t.attempts}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Follow-ups</span><span className="font-medium">{t.follow_up_count}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Call ID</span><span className="font-mono text-xs">{t.call_id || "—"}</span></div>
-                  {t.last_error && <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{t.last_error}</div>}
                 </CardContent>
               </Card>
             </div>

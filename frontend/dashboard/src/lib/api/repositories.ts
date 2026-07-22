@@ -7,14 +7,19 @@
  * satisfies the interface, wire it in index.ts. Nothing else changes.
  */
 import type {
+  AdminSettings,
   AppNotification,
+  CallRecord,
   Conversation,
   Customer,
   CustomerProfile,
   DashboardStats,
   Escalation,
   Executive,
+  ExecutiveRecord,
+  KbResult,
   LiveCall,
+  SearchResult,
   SystemHealth,
   Ticket,
 } from "./types";
@@ -34,6 +39,28 @@ export interface DashboardRepository {
 export interface TicketRepository {
   list(query?: TicketQuery): Promise<Ticket[]>;
   get(id: string): Promise<Ticket | null>;
+  setStatus(id: string, status: string): Promise<Ticket>;
+  assign(id: string, executive: string): Promise<Ticket>;
+  addNotes(id: string, notes: string): Promise<Ticket>;
+}
+
+export interface CallRepository {
+  list(q?: string): Promise<CallRecord[]>;
+  get(id: string): Promise<CallRecord | null>;
+}
+
+export interface SettingsRepository {
+  get(): Promise<AdminSettings>;
+  save(patch: Partial<AdminSettings>): Promise<AdminSettings>;
+}
+
+export interface SearchRepository {
+  query(q: string): Promise<SearchResult[]>;
+}
+
+export interface KbRepository {
+  search(q: string): Promise<KbResult[]>;
+  reload(): Promise<{ reloaded: boolean; chunks: number }>;
 }
 
 export interface CustomerRepository {
@@ -49,8 +76,11 @@ export interface SystemRepository {
   health(): Promise<SystemHealth>;
 }
 
-export interface ExecutiveRepository {
-  list(): Promise<Executive[]>;
+export interface ExecutiveAdminRepository {
+  list(): Promise<ExecutiveRecord[]>;
+  create(e: Omit<ExecutiveRecord, "id" | "created_at">): Promise<ExecutiveRecord>;
+  update(id: number, e: Omit<ExecutiveRecord, "id" | "created_at">): Promise<ExecutiveRecord>;
+  remove(id: number): Promise<void>;
 }
 
 export interface EscalationRepository {
@@ -70,9 +100,13 @@ export interface Repositories {
   tickets: TicketRepository;
   customers: CustomerRepository;
   liveCalls: LiveCallRepository;
+  calls: CallRepository;
   system: SystemRepository;
-  executives: ExecutiveRepository;
+  executivesAdmin: ExecutiveAdminRepository;
   escalations: EscalationRepository;
   conversations: ConversationRepository;
   notifications: NotificationRepository;
+  settings: SettingsRepository;
+  search: SearchRepository;
+  kb: KbRepository;
 }
