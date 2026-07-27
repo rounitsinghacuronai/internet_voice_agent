@@ -117,7 +117,13 @@ def active_sessions() -> list[dict]:
 # Shared thread-pool for CPU-bound audio processing (AGC, spectral gate, AEC,
 # noisereduce).  Running these synchronously in the event loop blocks the WS
 # receiver and makes the mic appear to freeze on longer utterances.
-_AUDIO_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="audio")
+# LATENCY: sized to 4 (was 2) so 3-4 concurrent calls each get a free worker for
+# their process_utterance() instead of queuing behind another call's turn —
+# under concurrent load the "pipe" stage otherwise inflates for every call
+# waiting on the pool, which shows up as latency that has nothing to do with
+# any one call's own audio. Bounded (not unbounded) since each worker briefly
+# pins a CPU core during noisereduce/AEC; tune to actual vCPU count in prod.
+_AUDIO_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="audio")
 
 
 class VoiceSession:
