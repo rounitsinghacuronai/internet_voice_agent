@@ -113,10 +113,20 @@ class GeminiLLM:
                  "function": {"name": c["name"], "arguments": json.dumps(args, ensure_ascii=False)}}
             )
         if usage:
+            # LATENCY DIAGNOSTIC: ~99% of our ~10k-token prompt (static system
+            # prompt + 29 tool schemas) is byte-identical on every call, which is
+            # exactly what prompt caching exists for. The OpenAI-compat usage
+            # object reports cache hits under prompt_tokens_details.cached_tokens
+            # (mirroring OpenAI's own field name) when Gemini's implicit context
+            # caching kicks in. Logging the full block (once) tells us definitively
+            # whether caching is active — if cached_tokens stays ~0 turn after
+            # turn despite an unchanged prefix, that IS the latency bug, not the
+            # prompt content itself. Remove once this is resolved.
+            details = usage.get("prompt_tokens_details") or {}
             log.info(
-                "gemini usage: prompt=%d completion=%d total=%d",
+                "gemini usage: prompt=%d completion=%d total=%d cached=%s raw_details=%s",
                 usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
-                usage.get("total_tokens", 0),
+                usage.get("total_tokens", 0), details.get("cached_tokens", "n/a"), details,
             )
         yield LLMDelta(tool_calls=assembled, finish=finish or ("tool_calls" if assembled else "stop"),
                        usage=usage)
