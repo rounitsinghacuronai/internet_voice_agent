@@ -52,6 +52,18 @@ _ROM_HI = ["nahi", "hai", "mera", "matlab", "aa rahi", "gaya", "kyu", "zyada", "
 _ROM_MR = ["aahe", "nahi ye", "majha", "mazha", "kasa", "geli", "kiti", "pahije", "zala",
            "karaycha", "ho ka", "barobar", "madhe"]
 
+# Universal cross-lingual pleasantries/interjections — a Hindi or Marathi
+# speaker says these in Latin script constantly WITHOUT meaning to switch
+# language (real production case: a caller mid-Hindi-conversation said
+# "Hello" and "Thank you" as pure politeness, and each one got counted as a
+# confident "en" vote, drifting the whole call's language after just two of
+# them). None of these carry real language signal, so _detect() treats them
+# as "und" (no vote) rather than "en" — they must not move the streak at all.
+_NEUTRAL_FILLERS = {
+    "hello", "hi", "hey", "hmm", "hm", "mm", "mhm", "uh", "um", "uhh", "umm",
+    "ok", "okay", "yes", "no", "bye", "thanks", "thank you", "thankyou",
+}
+
 
 _ASK_TURNS = 3   # consecutive indeterminate turns before we ever ask outright
 
@@ -182,6 +194,14 @@ class LanguageEngine:
 
     @staticmethod
     def _detect(text: str, stt_hint: str) -> str:
+        # Empty transcript (silence/noise the STT gave up on) or a bare
+        # cross-lingual pleasantry carries NO language signal — never vote,
+        # regardless of what STT's language hint claims (an empty STT result
+        # was observed tagged hint="en-IN", which would otherwise have been
+        # read as a confident "caller is speaking English").
+        stripped = re.sub(r"[^\w\s]", "", text.strip().lower())
+        if not stripped or stripped in _NEUTRAL_FILLERS:
+            return "und"
         hint = (stt_hint or "").lower()
         # Hindi/Marathi hints are NOT trusted blindly — Sarvam mislabels these
         # two constantly (same script). The WORDS decide; the hint only breaks
