@@ -1,0 +1,64 @@
+id: iot_devices_fundamentals
+title: IoT device and systems fundamentals
+category: general
+kind: article
+source: "TSSC Facilitator Guide - Telecom Technician IoT Devices/Systems, TEL/Q6210 V5.0 (Nov 2025)"
+version: "TEL-Q6210-v5.0"
+language: en
+sections:
+  - title: Sensor vs actuator (Ref FG p.15)
+    keywords: [sensor, actuator, IoT sensor, IoT actuator, difference between sensor and actuator, सेंसर, ऍक्ट्युएटर, स्मार्ट डिव्हाइस]
+    text: >
+      A sensor detects a physical condition - temperature, motion, light, gas, water flow -
+      and converts it into an electrical signal a microcontroller can read. An actuator does
+      the reverse: it receives a command signal and produces a physical action, such as a
+      motor turning, a relay switching, or a buzzer sounding. In a customer's smart-home or
+      smart-metering setup, sensors report data upstream to the gateway/cloud while actuators
+      execute commands sent back down, e.g. a smart plug switching off remotely.
+  - title: IoT communication protocol choice (Ref FG p.17-18)
+    keywords: [IoT protocol, LoRaWAN, NB-IoT, Zigbee, Bluetooth, MQTT, CoAP, wireless protocol, 5G IoT, कनेक्टिविटी प्रोटोकॉल]
+    text: >
+      IoT devices use short-range protocols - Bluetooth, Zigbee, Wi-Fi, RFID, NFC - for
+      metre-scale links with higher data speed, or long-range/low-power protocols - LoRaWAN,
+      NB-IoT, 5G/LTE-M - for kilometre-scale links with multi-year battery life but lower
+      speed. Application-layer protocols such as MQTT, CoAP and HTTP carry the data once a
+      network link exists. Protocol choice depends on required distance, data speed, and
+      power budget: a battery-run soil or water sensor typically uses LoRaWAN/NB-IoT; a
+      smart TV, laptop, or camera uses Wi-Fi.
+  - title: Microcontroller boards used in IoT installs (Ref FG p.19-20)
+    keywords: [microcontroller, Arduino, ESP32, Raspberry Pi, development board, pin configuration, मायक्रोकंट्रोलर]
+    text: >
+      A microcontroller board (Arduino UNO, NodeMCU, ESP32, Raspberry Pi Pico, etc.) is the
+      "brain" that reads sensor input and drives actuator output. Key parts a technician must
+      identify before wiring are the power pins, digital and analog I/O pins, the USB/serial
+      connector, and the reset button. Handling the wrong pin or reversing power polarity is
+      the most common cause of a "board not detected" or dead-on-arrival fault during
+      installation - always confirm pinout against the board's datasheet before connecting.
+  - title: Edge devices and edge computing (Ref FG p.21-22)
+    keywords: [edge device, edge computing, gateway, smart camera, edge processing, एज डिव्हाइस]
+    text: >
+      An edge device (a gateway, smart camera, or local hub) sits between field sensors and
+      the cloud and processes data locally before forwarding it. Edge processing reduces
+      latency, saves bandwidth, and lets a device keep working briefly even if the cloud link
+      drops. In telecom deployments, routers, ONTs, and IoT gateways are all edge devices;
+      distinguishing "no local edge processing" from "no cloud connectivity" is a key first
+      triage step when a smart device stops reporting data.
+  - title: Nodes, gateways and the IoT framework flow (Ref FG p.23-24)
+    keywords: [IoT node, IoT gateway, IoT framework, sensor to cloud, node gateway architecture, नोड, गेटवे]
+    text: >
+      A complete IoT system flows sensor to node to gateway to cloud to user interface. The
+      node packages sensor readings and forwards them over a short-range protocol; the
+      gateway aggregates multiple nodes and bridges them to the internet (Wi-Fi, Ethernet, or
+      cellular SIM); the cloud platform stores and analyzes the data for the mobile app or
+      dashboard. A break at any one stage - node not pairing, gateway not forwarding, or cloud
+      not receiving - produces a different symptom, which is why isolating the stage first
+      (node LED, gateway log, dashboard) is faster than restarting everything at once.
+  - title: Cloud platform basics for IoT (Ref FG p.25-26)
+    keywords: [cloud computing, IoT cloud platform, ThingsBoard, AWS IoT, Azure IoT, data storage, क्लाउड]
+    text: >
+      The cloud layer (e.g. AWS IoT, Azure IoT, ThingsBoard, Blynk) stores incoming device
+      data, runs analytics, and serves the customer-facing dashboard or app. If hardware and
+      network connectivity both check out but "no data on the app", the fault is usually a
+      device-to-cloud registration or firmware/API-key mismatch rather than a network problem
+      - check the device is actually registered and paired to the correct cloud project before
+      escalating as a network fault.

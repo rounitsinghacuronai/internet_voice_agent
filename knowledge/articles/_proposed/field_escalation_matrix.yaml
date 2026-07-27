@@ -1,0 +1,36 @@
+id: field_escalation_matrix
+title: Field fault escalation levels (technician SOP)
+category: complaints
+kind: decision_tree
+source: "TSSC Facilitator Guide - Telecom Technician IoT Devices/Systems, TEL/Q6210 V5.0 (Nov 2025)"
+version: "TEL-Q6210-v5.0"
+language: en
+sections:
+  - title: Level 1 vs Level 2 escalation criteria (Ref FG p.72, 77-78)
+    keywords: [escalation matrix, level 1, level 2, escalate ticket, when to escalate, एस्केलेशन, तक्रार वाढवा]
+    text: >
+      Level 1 covers what a field technician resolves at the customer premises directly:
+      checking cables, power, IP settings, and rebooting devices. Level 2 is triggered when
+      Level 1 steps do not resolve the issue and requires deeper tools: ping/tracert analysis,
+      CPE configuration review, signal-level checks, and backend/NOC log review. A fault
+      should only move to Level 2 (or to an engineer dispatch / NOC ticket) after the Level 1
+      checklist has genuinely been completed and failed - skipping straight to escalation
+      without the basic checks is treated as a process failure, not a shortcut.
+  - title: Why documentation matters at every escalation (Ref FG p.77-78, 104)
+    keywords: [documentation, ticket notes, SLA compliance, audit trail, troubleshooting record, दस्तऐवजीकरण]
+    text: >
+      Every escalation decision, test result, and resolution step should be logged in the
+      ticketing system before and after handoff. This documentation protects both the
+      technician and the company, supports SLA compliance tracking, and is the primary input
+      for later fault analysis if the same issue recurs. A technician deciding "resolve vs
+      escalate" should be able to justify the decision from the recorded symptoms and test
+      results, not from memory.
+  - title: Customer communication during remote troubleshooting (Ref FG p.77-78)
+    keywords: [customer communication, remote troubleshooting, calm communication, frustrated customer, ग्राहक संवाद]
+    text: >
+      When a fault cannot be fixed immediately, best practice is to communicate the current
+      diagnosis, what has been ruled out, and a realistic next step or ETA - rather than
+      giving vague reassurance. Calm, clear, and honest communication reduces repeat calls and
+      customer frustration even when the underlying fault takes longer to fix. This applies
+      whether the technician is on-site or guiding the customer through self-help steps
+      remotely.

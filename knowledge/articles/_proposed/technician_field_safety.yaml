@@ -1,0 +1,50 @@
+id: technician_field_safety
+title: Technician field safety and sustainable practices
+category: safety
+kind: policy
+source: "TSSC Facilitator Guide - Telecom Technician IoT Devices/Systems, TEL/Q6210 V5.0 (Nov 2025)"
+version: "TEL-Q6210-v5.0"
+language: en
+sections:
+  - title: RF exposure and grounding safety during installs (Ref FG p.44-45)
+    keywords: [RF safety, grounding, earthing, PPE, installation safety, ग्राउंडिंग, सुरक्षा उपाय]
+    text: >
+      Grounding of installed equipment is mandatory, not optional, and should be verified with
+      a multimeter before an installation is considered complete. Antennas and RF-emitting
+      equipment should be positioned and handled per manufacturer safety guidance to limit
+      radiation exposure. PPE (gloves, and eye protection where soldering or drilling is
+      involved) must be worn during physical installation work; unsafe drilling or wiring
+      practices should be corrected on the spot rather than after the fact.
+  - title: Safe mounting and weatherproofing (Ref FG p.42-43)
+    keywords: [device mounting, weatherproof installation, outdoor installation, bracket mounting, PPE, माउंटिंग सुरक्षा]
+    text: >
+      Devices mounted outdoors (cameras, sensors, ONTs) need weatherproof sealing and secure
+      anchoring appropriate to the wall or pole material - a loosely mounted device is one of
+      the most common causes of later field complaints (water ingress, disconnection,
+      physical damage). Reading the device datasheet before drilling or wiring, and using the
+      correct anchor/fastener for the surface, prevents most of these repeat callouts.
+  - title: Crimping and soldering safety (Ref FG p.94-95)
+    keywords: [crimping safety, soldering safety, soldering iron, PPE gloves, cable termination safety, सोल्डरिंग सुरक्षा]
+    text: >
+      When re-terminating a cable, strip insulation cleanly, keep conductor pairs in the
+      correct order, crimp firmly with the correct connector type, and insulate any soldered
+      joint with heat-shrink before closing up. Soldering irons must be handled with PPE and
+      kept clear of loose cabling; a joint should always be tested for continuity with a
+      multimeter before the work is considered finished.
+  - title: E-waste handling and disposal (Ref FG p.100-101)
+    keywords: [e-waste, electronic waste disposal, recycling, hazardous waste, sustainability, ई-वेस्ट, कचरा व्यवस्थापन]
+    text: >
+      Damaged or replaced telecom components (cables, adapters, batteries, faulty CPE units)
+      should be sorted into recyclable/refurbishable and hazardous/non-hazardous categories,
+      labeled, and routed to an authorized e-waste recycling or disposal agency rather than
+      discarded with general waste. Records of what was disposed of, and through which
+      channel, should be maintained as part of the site's sustainability and compliance
+      documentation.
+  - title: Energy-efficient installation practices (Ref FG p.100-101)
+    keywords: [energy efficiency, carbon footprint, renewable energy telecom, energy optimization, ऊर्जा बचत]
+    text: >
+      Where practical, installations should favor energy-efficient equipment, optimal
+      placement to reduce power draw, and renewable power options (e.g. solar for
+      remote/battery-backed sites) to reduce both operating cost and the site's carbon
+      footprint. This is treated as a standard part of installation planning, not an optional
+      add-on, for new telecom infrastructure.

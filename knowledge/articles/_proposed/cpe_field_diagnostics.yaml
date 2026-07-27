@@ -1,0 +1,85 @@
+id: cpe_field_diagnostics
+title: CPE and network fault diagnostics (technician-level)
+category: connections
+kind: article
+source: "TSSC Facilitator Guide - Telecom Technician IoT Devices/Systems, TEL/Q6210 V5.0 (Nov 2025)"
+version: "TEL-Q6210-v5.0"
+language: en
+sections:
+  - title: Ping and traceroute triage (Ref FG p.71-72, 75-76)
+    keywords: [ping, traceroute, tracert, latency test, packet loss, gateway ping, नेटवर्क टेस्ट, कनेक्टिविटी टेस्ट]
+    text: >
+      To isolate whether a fault is on the customer side or the provider side, ping the CPE
+      (local router/ONT) first, then ping the ISP gateway, recording minimum, maximum and
+      average response time and any packet loss. If the local CPE ping is clean but the
+      gateway ping fails or shows heavy loss, the fault is upstream (provider network); if
+      even the local CPE does not respond, the fault is at the customer premises (cabling,
+      power, or device). Traceroute after a failed gateway ping shows the exact hop where
+      delay or drop begins.
+  - title: Speed test as final acceptance check (Ref FG p.79-80)
+    keywords: [speed test, throughput, download upload speed, Ookla, Fast.com, plan speed mismatch, स्पीड टेस्ट]
+    text: >
+      A speed test (Ookla/Speedtest, Fast.com) run over Wi-Fi and again over a wired Ethernet
+      connection is the standard way to confirm actual throughput matches the customer's
+      subscribed plan. If the wired test matches the plan but Wi-Fi is much slower, the
+      bottleneck is wireless (band congestion, distance, interference) and not the broadband
+      line itself. Speed test results, along with ping/packet-loss figures, should be recorded
+      as part of the installation or troubleshooting documentation for future reference.
+  - title: CPE configuration essentials - VLAN, NAT, QoS, IPv6 (Ref FG p.69-70, 100-101)
+    keywords: [CPE configuration, VLAN, NAT, QoS, IPv6, router admin panel, default password, राऊटर सेटिंग्स]
+    text: >
+      Base CPE setup covers changing default admin credentials (the single most important
+      security step), assigning IP/gateway/subnet mask, enabling NAT to share the public IP
+      across LAN devices, and applying QoS to prioritize latency-sensitive traffic (video
+      calls, gaming) over bulk downloads. VLAN separates traffic into virtual segments, useful
+      for isolating a guest network or IoT devices from the main home network. IPv6 support
+      should be enabled where available for future-proofing and routing efficiency.
+  - title: Signal loss, attenuation and interference basics (Ref FG p.92-93)
+    keywords: [signal loss, attenuation, interference, EMI, signal degradation, cable length signal drop, सिग्नल कमजोर]
+    text: >
+      Signal strength drops with cable length, through splitters, and at loose or corroded
+      connector joints - each added splitter or extra metre of cable measurably reduces signal
+      level. Electro-Magnetic Interference (EMI) from nearby power lines, motors, or other
+      wireless devices can further degrade a signal even when the physical connection is
+      intact. A quick way to isolate the cause on-site: measure signal at the splitter, then
+      again at the terminated end - a large drop between the two points points to a bad
+      connector or cable run rather than an area-wide fault.
+  - title: Cable and connector fault identification and repair (Ref FG p.90-91, 94-95)
+    keywords: [faulty cable, faulty connector, crimping, soldering, RJ-45, coaxial connector, re-connectorization, केबल खराब, कनेक्टर सैल]
+    text: >
+      Common physical-layer faults are a loosely seated connector, a damaged or bent cable
+      end, and corrosion at the termination point. Repair follows a fixed sequence: cut back
+      the damaged section, strip insulation cleanly, arrange conductor pairs in the correct
+      color order, crimp with the correct RJ-45/coaxial connector, then verify continuity with
+      a multimeter or LAN tester before closing up. Soldering (with flux and heat-shrink
+      insulation) is used where a crimped joint alone is not reliable enough, such as a
+      repeatedly-flexed cable run.
+  - title: Advanced diagnostic tools - SLM, OTDR, CPE logs (Ref FG p.96-99)
+    keywords: [signal level meter, SLM, OTDR, CPE logs, fiber fault location, optical time domain reflectometer, फायबर फॉल्ट]
+    text: >
+      A Signal Level Meter (SLM) measures signal strength/quality at a point in the network.
+      An Optical Time-Domain Reflectometer (OTDR) pinpoints the exact distance to a fiber
+      break, reflection point, or excess-loss splice - this is the standard tool for locating a
+      fiber cut rather than guessing along the route. CPE device logs (accessed via the
+      router/ONT's admin interface) record warning and error events; reviewing these logs
+      before deciding on a truck roll often reveals the fault (e.g. repeated PPPoE
+      disconnects, DHCP failures) without an on-site visit.
+  - title: CPE firmware update and reset procedure (Ref FG p.98-99, 104)
+    keywords: [firmware update, router reset, CPE reboot, factory reset, backup configuration, राऊटर रीसेट, फर्मवेअर अपडेट]
+    text: >
+      Standard CPE recovery procedure: log into the CPE admin interface, back up the current
+      configuration, upload and apply the latest firmware, then reboot the device and confirm
+      it rejoins the network with the expected settings restored. A factory reset should be a
+      later step, not the first one, since it clears all customer-specific configuration
+      (Wi-Fi name, password, port forwarding) that will need to be re-entered - always attempt
+      a firmware update or soft reboot before a full factory reset.
+  - title: Common broadband fault types and root causes (Ref FG p.102-104)
+    keywords: [no service, degraded service, intermittent connectivity, broadband fault types, root cause, नेट बंद, वारंवार डिस्कनेक्ट]
+    text: >
+      Field-observed broadband faults fall into three categories: no service (complete
+      outage), degraded service (speed below plan), and intermittent connectivity (repeated
+      drops). Root causes most frequently cited are loose or damaged cabling, signal
+      interference, poor line quality, a faulty CPE unit, or network congestion. Every
+      troubleshooting visit should end with the fault type, test results (ping, speed test),
+      and the resolution step logged in the ticketing/CRM system - documentation is treated as
+      equally important as the fix itself, since it drives future fault analysis and audits.
