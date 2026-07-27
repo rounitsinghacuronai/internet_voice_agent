@@ -29,7 +29,7 @@ import numpy as np
 import pytest
 
 # Make the repo importable regardless of where pytest is run from
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.app.barge_in.manager import InterruptionEvent, InterruptionManager
 from backend.app.config import get_settings

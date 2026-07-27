@@ -60,7 +60,8 @@ from ..tools.registry import ToolRegistry
 from . import safety
 from .language import LanguageEngine
 from .memory import CallMemory
-from .robustness import ConfidenceEstimate, TopicStability, estimate_confidence
+from .robustness import (ConfidenceEstimate, ConfidenceTier, TopicStability,
+                         estimate_confidence, repeated_low_confidence_directive)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,16 @@ _TROUBLESHOOT_TOOLS = {
 # done" list) so the instruction is impossible to miss.
 _RESTART_TOOLS = {"restart_ont"}
 
+# Tools that create a real, billable/dispatchable side effect and must never
+# fire twice in one call — a second call doesn't just annoy the caller, it
+# creates a duplicate order/ticket in the backend (observed: a barge-in cut
+# off the confirmation before the caller heard it, and the agent — with no
+# memory that the first attempt already succeeded — registered a SECOND new
+# connection application for the same call). request_plan_change is
+# deliberately excluded: a caller legitimately re-requesting a *different*
+# plan mid-call is normal, not a duplicate.
+_SINGLE_FIRE_TOOLS = {"register_new_connection", "request_sim_swap", "block_sim"}
+
 
 def _already_done_directive(tools_used: list[str]) -> str:
     """Deterministic 'don't repeat yourself' directive built from every tool
@@ -138,6 +149,15 @@ def _already_done_directive(tools_used: list[str]) -> str:
     if any(t in _RESTART_TOOLS for t in tools_used):
         line += (" A router/ONT restart has ALREADY been done this call — "
                  "never suggest or offer one again for this issue.")
+    fired_single_fire = [t for t in _SINGLE_FIRE_TOOLS if t in tools_used]
+    if fired_single_fire:
+        done_labels = "; ".join(_TOOL_LABEL.get(t, t) for t in fired_single_fire)
+        line += (f" {done_labels} has ALREADY been submitted this call — this "
+                 "creates a real backend order/ticket, so calling it again would "
+                 "create a DUPLICATE. Do not call it again for any reason, even if "
+                 "the caller repeats their request, corrects a detail, or the "
+                 "confirmation seemed to get cut off — just confirm what was "
+                 "already submitted (using the details already in memory) instead.")
     return line
 
 # NOTE: all identity-bearing fixed lines (greeting, silence nudge, closings,
@@ -186,6 +206,10 @@ class ConversationManager:
         self.topic = TopicStability()
         self.turn_no = 0
         self._last_confidence: ConfidenceEstimate | None = None
+        # Consecutive LOW/MEDIUM-confidence turns — feeds
+        # repeated_low_confidence_directive() so the prompt escalates instead
+        # of letting the model settle into repeating the same stock reply.
+        self._low_conf_streak: int = 0
         self._last_user_text = ""
         # Sticky caller-mood tracking: one angry sentence colours the next few
         # turns (a real person doesn't reset to neutral mid-grievance), then
@@ -444,6 +468,10 @@ class ConversationManager:
         # language_probability — there is no true per-word STT confidence) and
         # topic-stability tracking, both feed the system prompt for this turn.
         self._last_confidence = estimate_confidence(peak_prob, language_confidence)
+        if self._last_confidence.tier is ConfidenceTier.HIGH:
+            self._low_conf_streak = 0
+        else:
+            self._low_conf_streak += 1
         self.topic.update(user_text)
 
         # ── deterministic emergency fast-path ──
@@ -588,8 +616,9 @@ class ConversationManager:
 
     def _messages(self, knowledge_block: str = "") -> list[dict]:
         confidence_directive = self._last_confidence.directive() if self._last_confidence else ""
+        streak_directive = repeated_low_confidence_directive(self._low_conf_streak)
         directives = "\n\n".join(
-            d for d in (confidence_directive, self.topic.directive(),
+            d for d in (confidence_directive, streak_directive, self.topic.directive(),
                         self._mood_directive(), self._verified_caller_directive(),
                         self._escalation_decision.directive(),
                         _already_done_directive(self._tools_used)) if d

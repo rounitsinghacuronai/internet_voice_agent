@@ -76,6 +76,37 @@ class ConfidenceEstimate:
         )
 
 
+def repeated_low_confidence_directive(streak: int) -> str:
+    """Deterministic escalation for consecutive LOW/MEDIUM-confidence turns.
+
+    ConfidenceEstimate.directive() alone is advisory prose re-sent fresh every
+    turn — under sustained garbled/cross-script audio the model was observed
+    settling on one short stock reply (e.g. a generic 'let me check that…')
+    and repeating it near-verbatim turn after turn, because nothing in the
+    prompt distinguishes turn 1 of unclear audio from turn 4. This tracks the
+    streak and forces a concretely different tactic as it grows, the same
+    escalating-directive pattern EscalationEngine uses for failed
+    troubleshooting attempts."""
+    if streak < 2:
+        return ""
+    if streak == 2:
+        return (
+            "[REPEATED UNCLEAR AUDIO] The caller's last two utterances were "
+            "both hard to transcribe. Do NOT reuse the same sentence or "
+            "phrasing you used last turn — that will sound like the call "
+            "froze. Say something concretely different: name the exact word "
+            "or number you're unsure of, and ask them to say just that one "
+            "piece slowly, one word or digit at a time."
+        )
+    return (
+        "[REPEATED UNCLEAR AUDIO — 3+ TURNS] The audio has been unclear for "
+        "several turns running. Do not ask the same way again. Change "
+        "tactics now: offer the keypad (DTMF) for anything numeric, or if "
+        "that's not it, offer to connect them to a human agent rather than "
+        "asking again."
+    )
+
+
 def estimate_confidence(
     peak_prob: float,
     language_confidence: float | None,

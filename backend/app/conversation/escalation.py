@@ -179,6 +179,8 @@ _TOOL_LABEL = {
     "block_sim": "SIM blocked", "request_plan_change": "Plan change",
     "request_sim_swap": "SIM/eSIM swap", "get_plan_catalog": "Plan catalog",
     "log_priority_incident": "Priority incident logged",
+    "register_new_connection": "New connection registered",
+    "get_new_connection_status": "New connection status checked",
 }
 
 _INTENT_HINT = [
