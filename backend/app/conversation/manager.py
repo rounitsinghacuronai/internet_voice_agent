@@ -50,7 +50,7 @@ from ..config import Settings
 from ..persona import get_persona
 from ..prompts.loader import compose_system_prompt
 from .escalation import (EscalationDecision, EscalationEngine,
-                         build_escalation_summary, _HUMAN_REQUEST)
+                         build_escalation_summary, _HUMAN_REQUEST, _TOOL_LABEL)
 from ..telephony.transfer_service import TransferContext
 from ..providers.base import LLMProvider, ProviderError
 from ..speech.director import detect_caller_emotion
@@ -105,6 +105,40 @@ _TROUBLESHOOT_TOOLS = {
     "restart_ont", "get_bill", "get_payment_status", "get_usage",
     "get_recharge_history",
 }
+
+# The one step callers complain about most: a restart offered again after it
+# already ran. Called out by name (not just folded into the generic "already
+# done" list) so the instruction is impossible to miss.
+_RESTART_TOOLS = {"restart_ont"}
+
+
+def _already_done_directive(tools_used: list[str]) -> str:
+    """Deterministic 'don't repeat yourself' directive built from every tool
+    already called THIS CALL. The prompt's 'never repeat a step already done'
+    rule is advisory and depends on the model correctly inferring history from
+    its own prior spoken sentences; this hands it as a stated fact every turn
+    instead, the same pattern EscalationDecision.directive() uses to force
+    reliable tool-calling rather than hoping for it. Mirrors _TOOL_LABEL from
+    the escalation summary so the wording callers hear matches what gets
+    written to the handoff summary if it ever escalates."""
+    if not tools_used:
+        return ""
+    seen: list[str] = []
+    for t in tools_used:
+        label = _TOOL_LABEL.get(t)
+        if label and label not in seen:
+            seen.append(label)
+    if not seen:
+        return ""
+    line = ("[ALREADY DONE THIS CALL — do not repeat] You have already "
+            "performed: " + "; ".join(seen) + ". Do not redo any of these, "
+            "do not ask permission to redo them, and do not ask a question "
+            "you already have the answer to. Move straight to the next "
+            "troubleshooting step, a different explanation, or an escalation.")
+    if any(t in _RESTART_TOOLS for t in tools_used):
+        line += (" A router/ONT restart has ALREADY been done this call — "
+                 "never suggest or offer one again for this issue.")
+    return line
 
 # NOTE: all identity-bearing fixed lines (greeting, silence nudge, closings,
 # safety, emergency follow-ups) live in backend/app/persona.py — the single
@@ -557,7 +591,8 @@ class ConversationManager:
         directives = "\n\n".join(
             d for d in (confidence_directive, self.topic.directive(),
                         self._mood_directive(), self._verified_caller_directive(),
-                        self._escalation_decision.directive()) if d
+                        self._escalation_decision.directive(),
+                        _already_done_directive(self._tools_used)) if d
         )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
                                        knowledge_block, directives, persona=self.persona)
@@ -664,13 +699,22 @@ class ConversationManager:
             # persona-correct thinking filler NOW — TTS plays it while the lookups
             # and the next round execute. Fires on ANY silent tool round (not just
             # round 0) so a multi-round tool loop never drops the caller into dead
-            # air mid-verification. The per-call VariationTracker guarantees the
-            # filler is never the same phrase twice in a row, so it stays human.
+            # air mid-verification. TASK-AWARE: the filler names what's actually
+            # happening ("Pulling up your bill…" for billing tools, "Running a
+            # diagnostic…" for network tools) instead of a generic "hmm, let me
+            # check" — a real agent describes the specific action, not just stalls.
+            # The rotation key is bucketed per task so "checking your account" and
+            # "looking at the network" rotate independently instead of sharing one
+            # pool — a caller who hits three different tool types in one call still
+            # never hears the same filler twice in a row within a bucket.
             if not spoken and not self.end_call_requested \
                     and self.speech is not None:
-                from ..speech.lexicon import HESITATIONS, lang_table
+                from ..speech.lexicon import filler_bucket_name, task_filler
+                tool_names_this_round = [
+                    c.get("function", {}).get("name", "") for c in tool_calls]
+                bucket = filler_bucket_name(tool_names_this_round)
                 filler = self.speech.variation.pick(
-                    f"hes:{lang}", lang_table(HESITATIONS, lang))
+                    f"hes:{bucket}:{lang}", task_filler(tool_names_this_round, lang))
                 if filler:
                     self.memory.history.append(
                         {"role": "assistant", "content": filler + "…"})

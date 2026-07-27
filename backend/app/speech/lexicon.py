@@ -30,6 +30,107 @@ HESITATIONS: dict[str, list[str]] = {
     "mr": ["एक मिनिट, बघतो", "जरा तपासतो", "एक सेकंद", "आत्ता बघतो", "जरा बघू द्या"],
 }
 
+# ── TASK-AWARE thinking fillers — which tool is actually running ──────────────
+# HESITATIONS above is the generic fallback ("let me check"). A caller who hears
+# the SAME generic filler whether the agent is verifying their identity,
+# registering a complaint, or preparing a transfer is a clear "this is a bot"
+# tell — a human executive says "let me pull up your account" while verifying
+# and "I'm registering that now" while filing a ticket, not the same line every
+# time. Keyed by TASK BUCKET (not one entry per tool — most tools in a bucket
+# want the same kind of filler); task_filler() below maps a tool name to its
+# bucket, falling back to HESITATIONS for anything not explicitly mapped so a
+# new tool never crashes or goes silent, it just sounds slightly more generic
+# until it's added here.
+TASK_FILLERS: dict[str, dict[str, list[str]]] = {
+    "verification": {
+        "en": ["I'm verifying your details", "Let me just verify that",
+               "Let me pull up your account", "Verifying that now"],
+        "hi": ["मैं आपकी डिटेल्स वेरीफाई कर रहा हूँ", "ज़रा वेरीफाई कर लेता हूँ",
+               "आपका अकाउंट देखता हूँ"],
+        "mr": ["मी तुमचे डिटेल्स तपासतो", "जरा वेरिफाय करतो", "तुमचं अकाउंट बघतो"],
+    },
+    "lookup": {
+        "en": ["Let me check your connection", "Checking that now",
+               "Let me pull that up", "Give me one second to check"],
+        "hi": ["आपका कनेक्शन चेक करता हूँ", "अभी देखता हूँ", "एक सेकंड में बताता हूँ"],
+        "mr": ["तुमचं कनेक्शन तपासतो", "आत्ता बघतो", "एक सेकंदात सांगतो"],
+    },
+    "ticket": {
+        "en": ["I'm registering your complaint", "Filing that for you now",
+               "Registering this right away"],
+        "hi": ["मैं आपकी शिकायत दर्ज कर रहा हूँ", "अभी रजिस्टर करता हूँ"],
+        "mr": ["मी तुमची तक्रार नोंदवत आहे", "आत्ता नोंदवतो"],
+    },
+    "knowledge": {
+        "en": ["Looking up the relevant information", "Let me find that for you",
+               "Checking our records on that"],
+        "hi": ["मैं जानकारी देख रहा हूँ", "अभी जानकारी निकालता हूँ"],
+        "mr": ["मी माहिती बघत आहे", "आत्ता माहिती काढतो"],
+    },
+    "escalation": {
+        "en": ["I'm preparing your transfer", "Connecting you now, one moment",
+               "Setting that up for you"],
+        "hi": ["मैं आपका ट्रांसफर तैयार कर रहा हूँ", "अभी कनेक्ट करता हूँ"],
+        "mr": ["मी तुमचं ट्रान्सफर तयार करत आहे", "आत्ता कनेक्ट करतो"],
+    },
+    "engineer": {
+        "en": ["Checking engineer availability", "Let me check the visit schedule",
+               "Looking at available slots"],
+        "hi": ["इंजीनियर की उपलब्धता देखता हूँ", "स्लॉट चेक करता हूँ"],
+        "mr": ["इंजिनिअरची उपलब्धता बघतो", "स्लॉट तपासतो"],
+    },
+    "connection": {
+        "en": ["Setting that up now", "Processing that request",
+               "Let me get that arranged"],
+        "hi": ["अभी सेटअप करता हूँ", "रिक्वेस्ट प्रोसेस करता हूँ"],
+        "mr": ["आत्ता सेटअप करतो", "विनंती प्रोसेस करतो"],
+    },
+}
+
+# Tool name → filler bucket. Anything not listed here falls back to the
+# generic HESITATIONS table in task_filler() below.
+_TOOL_FILLER_BUCKET: dict[str, str] = {
+    "verify_customer": "verification", "send_otp": "verification",
+    "verify_otp": "verification",
+    "get_plan": "lookup", "get_bill": "lookup", "get_payment_status": "lookup",
+    "get_recharge_history": "lookup", "get_usage": "lookup",
+    "get_network_status": "lookup", "get_broadband_status": "lookup",
+    "run_line_diagnostics": "lookup", "restart_ont": "lookup",
+    "get_plan_catalog": "lookup", "track_complaint": "lookup",
+    "get_new_connection_status": "lookup",
+    "register_complaint": "ticket", "escalate_complaint": "ticket",
+    "log_priority_incident": "ticket",
+    "search_knowledge": "knowledge",
+    "transfer_to_senior_executive": "escalation",
+    "schedule_engineer_visit": "engineer",
+    "register_new_connection": "connection", "request_sim_swap": "connection",
+    "request_plan_change": "connection", "block_sim": "connection",
+}
+
+
+def filler_bucket_name(tool_names: list[str]) -> str:
+    """The task bucket for the tool(s) about to run, or 'generic' if none of
+    them are mapped. Exposed separately (not just inside task_filler) so the
+    caller can key its anti-repetition rotation per-bucket — verification
+    fillers and ticket fillers should rotate independently, not share one
+    'never repeat' pool with every other task."""
+    for name in tool_names or []:
+        bucket = _TOOL_FILLER_BUCKET.get(name)
+        if bucket:
+            return bucket
+    return "generic"
+
+
+def task_filler(tool_names: list[str], lang: str) -> list[str]:
+    """Pick the filler table for the tool(s) about to run. Uses the FIRST tool
+    name (a round is almost always one primary action); unmapped/unknown tools
+    fall back to the generic HESITATIONS table so this never goes silent or
+    errors on a new/uncatalogued tool."""
+    bucket = filler_bucket_name(tool_names)
+    table = TASK_FILLERS.get(bucket)
+    return lang_table(table, lang) if table else lang_table(HESITATIONS, lang)
+
+
 # ── empathy — one per issue, never per sentence, and varied ───────────────────
 EMPATHY: dict[str, list[str]] = {
     "en": ["I'm sorry you've had to deal with that", "That must be frustrating",
