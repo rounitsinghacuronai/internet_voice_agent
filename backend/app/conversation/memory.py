@@ -25,6 +25,8 @@ _FIELD_PROMPTS: dict[str, tuple[str, ...]] = {
                "phone number", "फोन नंबर", "फ़ोन नंबर", "number on which",
                "नंबर पर संपर्क", "कोणत्या नंबर", "किस नंबर"),
     "otp": ("otp", "one time password", "ओटीपी"),
+    "pincode": ("pin code", "pincode", "pin-code", "postal code", "zip code",
+               "पिन कोड", "पिनकोड", "पिन कोड नंबर"),
 }
 
 

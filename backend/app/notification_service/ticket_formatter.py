@@ -188,7 +188,10 @@ def build_summary(event_type: str, args: dict, result: dict, memory: dict,
         if args.get("plan"):
             nc.append(f"Plan wanted: {str(args['plan']).strip()}.")
         if args.get("address"):
-            nc.append(f"Install address: {str(args['address']).strip()}.")
+            addr_line = f"Install address: {str(args['address']).strip()}"
+            if args.get("pincode"):
+                addr_line += f", PIN {str(args['pincode']).strip()}"
+            nc.append(addr_line + ".")
         if args.get("preferred_slot"):
             nc.append(f"Preferred slot: {str(args['preferred_slot']).strip()}.")
         nc.append("No verification required (prospective customer).")

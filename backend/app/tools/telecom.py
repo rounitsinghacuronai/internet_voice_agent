@@ -124,12 +124,20 @@ class TelecomServices:
             CREATE TABLE IF NOT EXISTS visits(
               id TEXT PRIMARY KEY, account_no TEXT, slot TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS new_connections(
-              application_no TEXT PRIMARY KEY, name TEXT, address TEXT,
+              application_no TEXT PRIMARY KEY, name TEXT, address TEXT, pincode TEXT,
               service_type TEXT, plan TEXT, contact_mobile TEXT,
               preferred_slot TEXT, caller_number TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS feedback(
               id TEXT PRIMARY KEY, rating TEXT, comment TEXT, created_at TEXT);
             """)
+            # Migration: pincode was added to new_connections after the table
+            # already existed on production (and any dev) telecom.db, so
+            # CREATE TABLE IF NOT EXISTS above is a no-op there — add the
+            # column defensively rather than assuming a fresh DB.
+            try:
+                c.execute("ALTER TABLE new_connections ADD COLUMN pincode TEXT")
+            except sqlite3.OperationalError:
+                pass  # already has the column
             # Idempotent seeding: customers are STATIC reference data (never
             # modified at runtime — tickets/OTPs/incidents live in their own
             # tables), so INSERT OR REPLACE on every startup keeps the seed roster
@@ -398,7 +406,7 @@ class TelecomServices:
         return {"submitted": True, "reference": ref, "swap_type": swap_type, "note": note}
 
     def register_new_connection(self, name: str = "", address: str = "",
-                                service_type: str = "", plan: str = "",
+                                pincode: str = "", service_type: str = "", plan: str = "",
                                 contact_mobile: str = "", preferred_slot: str = "",
                                 caller_number: str = "") -> dict:
         """Log a NEW CONNECTION request. No verification/OTP — the caller is a
@@ -408,19 +416,23 @@ class TelecomServices:
 
         `contact_mobile` is the number the caller wants us to reach them on;
         `caller_number` is the number the call actually arrived from (caller ID).
-        Both are carried through to the ops ticket."""
+        `pincode` is the 6-digit PIN code of the installation address — kept as
+        its own field (not folded into the free-text address) so the ops team
+        can filter/route by serviceable area. Both mobile and pincode have
+        already passed the registry's number-format gate (10-digit 6/7/8/9
+        mobile, 6-digit non-zero-leading PIN) before this method ever runs."""
         app_no = f"NC{datetime.now():%y%m}{uuid.uuid4().hex[:6].upper()}"
         with self._conn() as c:
-            c.execute("INSERT INTO new_connections VALUES (?,?,?,?,?,?,?,?,?)",
-                      (app_no, name.strip(), address.strip(),
+            c.execute("INSERT INTO new_connections VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      (app_no, name.strip(), address.strip(), (pincode or "").strip(),
                        service_type.strip(), plan.strip(),
                        (contact_mobile or "").strip(), preferred_slot.strip(),
                        (caller_number or "").strip(), datetime.now().isoformat()))
-        log.info("NEW CONNECTION %s: %s / %s / %s @ %s", app_no, name,
-                 service_type, plan, address)
+        log.info("NEW CONNECTION %s: %s / %s / %s @ %s - %s", app_no, name,
+                 service_type, plan, address, pincode)
         return {"registered": True, "application_no": app_no,
                 "name": name, "service_type": service_type, "plan": plan,
-                "address": address, "contact_mobile": contact_mobile,
+                "address": address, "pincode": pincode, "contact_mobile": contact_mobile,
                 "preferred_slot": preferred_slot,
                 "note": "New connection request logged and forwarded to our "
                         "installation team. They will call the contact number to "

@@ -197,8 +197,10 @@ class NotificationService:
             account_no=account,
             service_type=(args.get("service_type") if is_new_conn
                           else memory.get("service_type")) or "",
-            location=(args.get("address") if is_new_conn
-                      else memory.get("location")) or "",
+            location=((f"{args['address']} - PIN {args['pincode']}"
+                       if is_new_conn and args.get("address") and args.get("pincode")
+                       else args.get("address") if is_new_conn
+                       else memory.get("location")) or ""),
             verified=bool(memory.get("verified")),
             call_id=call_id,
             complaint_no=(result.get("ticket_no") or result.get("visit_id")

@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from ..config import Settings
 from ..conversation.memory import CallMemory
-from ..conversation.numbers import EXPECTED_LENGTHS
+from ..conversation.numbers import EXPECTED_LENGTHS, number_type, strip_mobile_country_code
 from .telecom import TelecomServices
 
 log = logging.getLogger(__name__)
@@ -44,13 +44,30 @@ _NUMBER_ARG_FIELDS: dict[str, dict[str, str]] = {
     "send_otp": {"mobile": "mobile"},
     "verify_otp": {"mobile": "mobile", "otp": "otp"},
     "block_sim": {"mobile": "mobile"},
+    # New-connection prospects aren't verified, but their contact number and
+    # installation PIN code still need to be real numbers before we forward
+    # the request to the installation team — a 9-digit or 0-prefixed mobile,
+    # or a malformed PIN code, should bounce back to the caller, not the ops
+    # WhatsApp group.
+    "register_new_connection": {"contact_mobile": "mobile", "pincode": "pincode"},
 }
 
 
 def _validate_number_args(name: str, args: dict) -> str | None:
     """Return an error message if a number-type argument is present but the
-    wrong length (partial/garbled), else None. Absent args are fine — some
-    tools accept EITHER account_no OR mobile."""
+    wrong length or an invalid leading digit (partial/garbled/mistyped),
+    else None. Absent args are fine — some tools accept EITHER account_no or
+    mobile.
+
+    As a side effect, NORMALIZES every checked arg in `args` to its plain
+    digit string (in place) once it passes. This matters beyond just display:
+    downstream lookups like verify_customer/send_otp/verify_otp do a plain
+    string match against DB columns that hold bare digits ("9876543210", no
+    "+91", no spaces) — if the model ever passes the raw "+91 98765 43210"
+    straight through (e.g. read out of one sentence, not via the buffered
+    NumberBuffer capture path that already normalizes it), an unstripped
+    country code would make a perfectly valid customer's lookup silently
+    fail to match. Normalizing here, once, keeps every call site safe."""
     fields = _NUMBER_ARG_FIELDS.get(name)
     if not fields:
         return None
@@ -59,11 +76,22 @@ def _validate_number_args(name: str, args: dict) -> str | None:
         if not val:
             continue
         digits = "".join(ch for ch in str(val) if ch.isdigit())
+        # Tolerate a caller-read +91 country code landing here even when the
+        # LLM passed the raw digits straight through (rather than via the
+        # buffered NumberBuffer capture path) — e.g. it read "+91 98765
+        # 43210" out of a single sentence itself.
+        digits = strip_mobile_country_code(kind, digits)
         expected = EXPECTED_LENGTHS.get(kind)
         if expected is not None and len(digits) != expected:
             return (f"Refused: {arg_name} has {len(digits)} digits, expected {expected}. "
                      "This looks like a partial or misheard number — collect the complete "
                      "number from the caller before calling this tool again.")
+        t = number_type(kind)
+        if t is not None and not t.prefix_ok(digits):
+            return (f"Refused: {arg_name} '{digits}' doesn't start with a valid digit for "
+                     f"a {t.label} — this is almost certainly misheard. Re-collect it from "
+                     "the caller before calling this tool again.")
+        args[arg_name] = digits
     return None
 
 
@@ -143,13 +171,17 @@ def build_schemas() -> list[dict]:
         _fn("register_new_connection",
             "Log a NEW CONNECTION request from a prospective customer and forward it "
             "to the operations team. NO verification and NO OTP — the caller is not an "
-            "existing subscriber. Collect and pass: name, installation address, "
-            "service_type (mobile/prepaid|postpaid|fiber|enterprise), the plan they "
-            "want, a contact_mobile to reach them on, and a preferred_slot (preferred "
-            "callback/installation time). Call this once you have these details.",
-            {"name": S, "address": S, "service_type": S, "plan": S,
+            "existing subscriber. Collect and pass: their FULL name (first and last, not "
+            "just a first name), the full installation address, its 6-digit PIN code "
+            "(captured and confirmed on its own, same as any other number — never guess "
+            "or infer it from the address text), service_type (mobile/prepaid|postpaid|"
+            "fiber|enterprise), the plan they want, a contact_mobile to reach them on "
+            "(10 digits, no country code — strip a spoken +91 yourself if they include "
+            "it), and a preferred_slot (preferred callback/installation time). Call this "
+            "once you have these details.",
+            {"name": S, "address": S, "pincode": S, "service_type": S, "plan": S,
              "contact_mobile": S, "preferred_slot": S},
-            ["name", "address", "service_type", "contact_mobile"]),
+            ["name", "address", "pincode", "service_type", "contact_mobile"]),
         _fn("get_new_connection_status", "Stage of an EXISTING new-connection "
             "application (caller already has an application number). No verification "
             "needed.", {"application_no": S}, ["application_no"]),

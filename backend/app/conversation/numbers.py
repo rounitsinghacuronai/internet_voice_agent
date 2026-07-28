@@ -82,6 +82,37 @@ _TOKEN_RE = re.compile(r"[ऀ-ॿ]+|[A-Za-z]+|\d+")
 # of after speaking all ten.
 MOBILE_PREFIXES: frozenset[str] = frozenset("6789")
 
+# A caller very often reads their mobile number WITH the country code
+# ("+91 98765 43210", or digit-by-digit "nine one nine eight seven six five
+# four three two one zero"). STT never transcribes the "+" as a digit, so by
+# the time text reaches spoken_to_digits() a caller who included the code
+# leaves behind a plain leading "91" (or, rarer, the ISD-trunk "091"/"0091").
+# Left unhandled, the fixed 10-digit "mobile" slot either truncates the
+# FRONT of a 12-digit run (keeping two country-code digits and dropping the
+# caller's real last two) or overflows and gets chopped the same wrong way —
+# both silently hand a wrong number to verify_customer/register_new_connection.
+_MOBILE_COUNTRY_CODES: tuple[str, ...] = ("0091", "091", "91")
+
+
+def strip_mobile_country_code(field: str | None, digits: str) -> str:
+    """Strip a leading Indian ISD/STD prefix from a MOBILE-field digit string.
+
+    Deliberately narrow: only touches field == "mobile" (account/complaint/
+    reference numbers legitimately start with any digits, including 9 or 0,
+    and must never be silently shortened), and only strips when what's LEFT
+    after removing the prefix is exactly ten digits starting with a valid
+    mobile prefix (6-9) — so a number still mid-capture (where the eventual
+    length isn't known yet) is never mangled speculatively.
+    """
+    if field != "mobile" or not digits:
+        return digits
+    for cc in _MOBILE_COUNTRY_CODES:
+        if digits.startswith(cc):
+            rest = digits[len(cc):]
+            if len(rest) == 10 and rest[0] in MOBILE_PREFIXES:
+                return rest
+    return digits
+
 
 @dataclass(frozen=True)
 class NumberType:
@@ -123,12 +154,19 @@ class NumberType:
         return len_ok and self.prefix_ok(digits)
 
 
+# Indian PIN (postal index number) codes are always 6 digits and never start
+# with 0 (the department has never issued a 0xxxxx code) — used the same way
+# MOBILE_PREFIXES is, for live/gate validation.
+PINCODE_PREFIXES: frozenset[str] = frozenset("123456789")
+
 NUMBER_TYPES: dict[str, NumberType] = {
     "mobile":       NumberType("mobile", exact=10, groups=(5, 5), label="mobile number",
                                prefixes=MOBILE_PREFIXES),
     "account_no":   NumberType("account_no", exact=12, groups=(4, 4, 4), label="account number"),
     "otp":          NumberType("otp", exact=6, min_len=4, max_len=8, groups=(3, 3), label="OTP"),
     "pin":          NumberType("pin", exact=4, groups=(4,), label="PIN"),
+    "pincode":      NumberType("pincode", exact=6, groups=(3, 3), label="PIN code",
+                               prefixes=PINCODE_PREFIXES),
     "complaint_id": NumberType("complaint_id", min_len=6, max_len=14, label="complaint number"),
     "customer_id":  NumberType("customer_id", min_len=6, max_len=14, label="customer ID"),
     "reference":    NumberType("reference", min_len=4, max_len=16, label="reference number"),
@@ -524,6 +562,12 @@ class NumberBuffer:
         pos = parse_position(text)
         digit_text = _strip_position_phrase(text) if pos else text
         incoming = spoken_to_digits(digit_text)
+        # A caller reading their mobile number often includes the +91 country
+        # code in the same breath ("+91 98765 43210" -> "919876543210", 12
+        # digits). Strip it from this fragment BEFORE any length logic below,
+        # so a single-utterance capture lands on the correct 10 digits
+        # instead of being chopped from the wrong end.
+        incoming = strip_mobile_country_code(self.field, incoming)
         exp = self.expected_len
         if pos and incoming:
             self._place(pos[0], pos[1], incoming)
@@ -536,6 +580,13 @@ class NumberBuffer:
             self.digits = incoming[:exp]
         else:
             self.digits += incoming
+        # Second pass: covers the rarer split-turn case where the country
+        # code arrived on its own in an earlier fragment ("+91" <pause> then
+        # the 10-digit number read separately), so the combined buffer only
+        # now reaches the point where the strip's "exactly 10 left" check can
+        # fire. Must run BEFORE the overflow truncation below, or the country
+        # code would already have been chopped off the wrong (front) end.
+        self.digits = strip_mobile_country_code(self.field, self.digits)
         if exp is not None and len(self.digits) > exp:
             self.digits = self.digits[:exp]
         # Confidence bookkeeping for targeted recovery. A clean tail-append maps
