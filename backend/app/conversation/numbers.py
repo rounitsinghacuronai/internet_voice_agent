@@ -186,19 +186,38 @@ def group_for_readback(digits: str, field: str | None = None) -> str:
 
 
 # ── editing / positional intents ─────────────────────────────────────────────
-_RESTART_MARKERS = re.compile(
+# NOTE on Devanagari + \b: Python's \w (and therefore \b) does not treat
+# Devanagari vowel signs/anusvara (matras — ा ी ो ं etc.) as word characters,
+# so a trailing \b right after a Devanagari word silently fails to match
+# whenever that word ENDS in one of those (extremely common — verified e.g.
+# re.search(r"दुबारा\b", "...दुबारा से...") is None). Below, every Devanagari
+# term that can end in a matra is matched by plain substring containment
+# (the same convention language.py's _MR_MARKERS/_HI_MARKERS already use for
+# this exact reason) instead of being folded into a \b-bounded regex
+# alternation; Latin/romanized terms keep \b since that boundary works
+# correctly for them.
+_RESTART_MARKERS_LATIN = re.compile(
     r"\b(forget (that|it|this)|start (over|again|fresh)|restart|scratch that|"
-    r"clear (it|that)|new number|another number|use another|दुबारा|फिर से|"
-    r"नए सिरे|पुन्हा|नवीन नंबर|काढून टाका|रद्द)\b", re.IGNORECASE)
+    r"clear (it|that)|new number|another number|use another)\b", re.IGNORECASE)
+_RESTART_MARKERS_DEVANAGARI = (
+    "दुबारा", "फिर से", "नए सिरे", "पुन्हा", "नवीन नंबर", "काढून टाका", "रद्द",
+)
 
-_REMOVE_LAST_MARKERS = re.compile(
-    r"\b(remove|delete|drop|hata|hatao|काढा|हटाओ|मिटा)\b.*\b(last|end|आखरी|शेवट|अंतिम)\b"
-    r"|\b(last|आखरी|शेवट)\b.*\b(remove|delete|galat|wrong)\b", re.IGNORECASE)
+_REMOVE_WORDS_LATIN = re.compile(r"\b(remove|delete|drop|hata|hatao)\b", re.IGNORECASE)
+_REMOVE_WORDS_DEVANAGARI = ("काढा", "हटाओ", "मिटा")
+_LAST_WORDS_LATIN = re.compile(r"\b(last|end)\b", re.IGNORECASE)
+_LAST_WORDS_DEVANAGARI = ("आखरी", "शेवट", "अंतिम")
+_CORRECTION_WORDS_LATIN = re.compile(r"\b(galat|wrong)\b", re.IGNORECASE)
 
-_POSITION_RE = re.compile(
-    r"\b(first|last|next|फर्स्ट|पहल[ेा]|आखरी|शेवट|पुढ[ीच]|next)\s+"
-    r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
-    r"एक|दो|तीन|चार|पांच|दोन|पाच)\b", re.IGNORECASE)
+_POSITION_WORD_LATIN = re.compile(r"\b(first|last|next|फर्स्ट)\s+", re.IGNORECASE)
+_POSITION_WORD_DEVANAGARI = ("पहले", "पहला", "आखरी", "शेवट", "पुढी", "पुढच")
+# Count word right after a position word. Trailing \b replaced with a plain
+# separator lookahead (end-of-string / whitespace / common punctuation) —
+# the count words most likely to end a spoken phrase ("दो" = two, ends in
+# the "ो" vowel sign) are exactly the ones a real \b silently drops.
+_POSITION_COUNT_RE = re.compile(
+    r"^(\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"एक|दो|तीन|चार|पांच|दोन|पाच)(?=$|[\s।,.!?])", re.IGNORECASE)
 
 _POS_WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
                  "seven": 7, "eight": 8, "nine": 9, "ten": 10, "एक": 1, "दो": 2,
@@ -207,26 +226,88 @@ _POS_WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
 
 def wants_restart(text: str) -> bool:
     """Caller wants to abandon what's captured and start the number fresh."""
-    return bool(_RESTART_MARKERS.search(text or ""))
+    t = text or ""
+    if _RESTART_MARKERS_LATIN.search(t):
+        return True
+    return any(term in t for term in _RESTART_MARKERS_DEVANAGARI)
 
 
 def wants_remove_last(text: str) -> bool:
-    return bool(_REMOVE_LAST_MARKERS.search(text or ""))
+    t = text or ""
+    low = t.lower()
+    has_remove = bool(_REMOVE_WORDS_LATIN.search(low)) or any(
+        w in t for w in _REMOVE_WORDS_DEVANAGARI)
+    has_last = bool(_LAST_WORDS_LATIN.search(low)) or any(
+        w in t for w in _LAST_WORDS_DEVANAGARI)
+    has_correction = bool(_CORRECTION_WORDS_LATIN.search(low))
+    return (has_remove and has_last) or (has_last and has_correction)
+
+
+def _match_position_phrase(text: str) -> tuple[str, int, int, int] | None:
+    """Internal: locate a position phrase ('first four', 'पहले दो') in text.
+    Returns (which, count, start, end) — end spans through the count word —
+    or None. Shared by parse_position() and the NumberBuffer fragment-
+    stripping path (NumberBuffer.feed) so the two can never disagree about
+    where the phrase is."""
+    t = text or ""
+    low = t.lower()
+
+    m = _POSITION_WORD_LATIN.search(low)
+    if m:
+        which_word = m.group(1)
+        start = m.start()
+        rest_start = m.end()
+        rest = low[rest_start:]
+        ws_len = 0
+    else:
+        which_word = None
+        start = rest_start = None
+        rest = None
+        ws_len = 0
+        for word in _POSITION_WORD_DEVANAGARI:
+            idx = t.find(word)
+            if idx != -1:
+                which_word = word
+                start = idx
+                rest_start = idx + len(word)
+                after = t[rest_start:]
+                stripped = after.lstrip()
+                ws_len = len(after) - len(stripped)
+                rest = stripped.lower()
+                break
+        if which_word is None:
+            return None
+
+    cm = _POSITION_COUNT_RE.match(rest) if rest is not None else None
+    if not cm:
+        return None
+    which = ("first" if which_word in ("first", "फर्स्ट", "पहले", "पहला")
+             else "last" if which_word in ("last", "आखरी", "शेवट")
+             else "next")
+    raw = cm.group(1).lower()
+    count = int(raw) if raw.isdigit() else _POS_WORD_NUM.get(raw, 0)
+    if not count:
+        return None
+    end = rest_start + ws_len + cm.end()
+    return (which, count, start, end)
 
 
 def parse_position(text: str) -> tuple[str, int] | None:
     """Detect 'first four …', 'last two …', 'next four …' → (which, count).
     which ∈ {first,last,next}. Used to place a fragment at a known position."""
-    m = _POSITION_RE.search(text or "")
+    m = _match_position_phrase(text)
+    return (m[0], m[1]) if m else None
+
+
+def _strip_position_phrase(text: str) -> str:
+    """Remove a matched position phrase from text so its own count word
+    isn't later mistaken for a captured digit (used by NumberBuffer.feed)."""
+    t = text or ""
+    m = _match_position_phrase(t)
     if not m:
-        return None
-    which = m.group(1).lower()
-    which = ("first" if which in ("first", "फर्स्ट", "पहले", "पहला")
-             else "last" if which in ("last", "आखरी", "शेवट")
-             else "next")
-    raw = m.group(2).lower()
-    count = int(raw) if raw.isdigit() else _POS_WORD_NUM.get(raw, 0)
-    return (which, count) if count else None
+        return t
+    _, _, start, end = m
+    return t[:start] + " " + t[end:]
 
 
 def normalize_digit_words(text: str) -> str:
@@ -441,7 +522,7 @@ class NumberBuffer:
         # the position phrase first so its own number word ("four", "two") is not
         # mistaken for a captured digit.
         pos = parse_position(text)
-        digit_text = _POSITION_RE.sub(" ", text) if pos else text
+        digit_text = _strip_position_phrase(text) if pos else text
         incoming = spoken_to_digits(digit_text)
         exp = self.expected_len
         if pos and incoming:

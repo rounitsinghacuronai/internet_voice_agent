@@ -14,33 +14,44 @@ from .plan import SpeechContext, StyleName, StyleProfile
 from .profiles import apply_caller_emotion, base_profile
 
 # ── caller-emotion sensing from the last utterance (heuristic, multilingual) ──
-_ANGRY = re.compile(
-    r"\b(worst|pathetic|useless|ridiculous|nonsense|rubbish|stupid|terrible|"
-    r"बकवास|बेकार|फालतू|बेकार|घटिया|नालायक|वैताग|डोक्याला ताप)\b|!!+",
-    re.IGNORECASE,
-)
-_ANGRY_REPEAT = re.compile(
-    r"\b(kab tak|kabtak|roz roz|har baar|baar baar|कब तक|रोज़ रोज़|हर बार|बार बार|"
-    r"किती वेळा|रोज रोज|परत परत)\b",
-    re.IGNORECASE,
-)
-_FRUSTRATED = re.compile(
-    r"\b(again|third time|second time|still not|fed up|thak gaya|thak gayi|थक गया|"
-    r"थक गयी|फिर से|तिसऱ्यांदा|परत|थकलो|कंटाळलो|अजून)\b",
-    re.IGNORECASE,
-)
-_WORRIED = re.compile(
-    r"\b(scared|afraid|worried|dangerous|डर|घाबर|भीती|खतरा|धोका|चिंता)\b",
-    re.IGNORECASE,
-)
+# NOTE on Devanagari + \b: Python's \w (and therefore \b) does not treat
+# Devanagari vowel signs/anusvara (matras — ा ी ो ं etc.) as word characters,
+# so a trailing \b right after a Devanagari word silently fails to match
+# whenever that word ends in one (verified: re.search(r"रोज़ रोज़\b", "रोज़
+# रोज़ यही problem") was None — "angry repeat" never fired). Every Devanagari
+# term below is checked by plain substring containment instead — the same
+# convention conversation/language.py's _MR_MARKERS/_HI_MARKERS already use
+# for this exact reason — while Latin/romanized terms keep \b, which works
+# correctly for them.
+_ANGRY_LATIN = re.compile(
+    r"\b(worst|pathetic|useless|ridiculous|nonsense|rubbish|stupid|terrible)\b|!!+",
+    re.IGNORECASE)
+_ANGRY_DEVANAGARI = ("बकवास", "बेकार", "फालतू", "घटिया", "नालायक", "वैताग", "डोक्याला ताप")
+
+_ANGRY_REPEAT_LATIN = re.compile(
+    r"\b(kab tak|kabtak|roz roz|har baar|baar baar)\b", re.IGNORECASE)
+_ANGRY_REPEAT_DEVANAGARI = ("कब तक", "रोज़ रोज़", "हर बार", "बार बार", "किती वेळा",
+                            "रोज रोज", "परत परत")
+
+_FRUSTRATED_LATIN = re.compile(
+    r"\b(again|third time|second time|still not|fed up|thak gaya|thak gayi)\b",
+    re.IGNORECASE)
+_FRUSTRATED_DEVANAGARI = ("थक गया", "थक गयी", "फिर से", "तिसऱ्यांदा", "परत",
+                          "थकलो", "कंटाळलो", "अजून")
+
+_WORRIED_LATIN = re.compile(r"\b(scared|afraid|worried|dangerous)\b", re.IGNORECASE)
+_WORRIED_DEVANAGARI = ("डर", "घाबर", "भीती", "खतरा", "धोका", "चिंता")
+
 # gratitude / relief — the caller has visibly cooled off or is happy. Lets the
 # manager CLEAR a sticky negative mood instead of treating one angry sentence
 # five turns ago as a permanently angry caller.
-_CALM = re.compile(
-    r"\b(thank(?:s| you)?|great|perfect|wonderful|धन्यवाद|आभार(?:ी)?|शुक्रिया|"
-    r"थैंक|बरं झालं|छान|मस्त|बढ़िया|बढिया|बहुत अच्छा|खूप छान)\b",
-    re.IGNORECASE,
-)
+_CALM_LATIN = re.compile(r"\b(thank(?:s| you)?|great|perfect|wonderful)\b", re.IGNORECASE)
+_CALM_DEVANAGARI = ("धन्यवाद", "आभारी", "आभार", "शुक्रिया", "थैंक", "बरं झालं",
+                    "छान", "मस्त", "बढ़िया", "बढिया", "बहुत अच्छा", "खूप छान")
+
+
+def _hits(text: str, latin: re.Pattern, devanagari: tuple[str, ...]) -> bool:
+    return bool(latin.search(text)) or any(term in text for term in devanagari)
 
 
 def detect_caller_emotion(text: str, existing: str | None = None) -> str | None:
@@ -50,13 +61,14 @@ def detect_caller_emotion(text: str, existing: str | None = None) -> str | None:
         return existing
     if not text:
         return existing
-    if _ANGRY.search(text) or _ANGRY_REPEAT.search(text):
+    if (_hits(text, _ANGRY_LATIN, _ANGRY_DEVANAGARI)
+            or _hits(text, _ANGRY_REPEAT_LATIN, _ANGRY_REPEAT_DEVANAGARI)):
         return "angry"
-    if _FRUSTRATED.search(text):
+    if _hits(text, _FRUSTRATED_LATIN, _FRUSTRATED_DEVANAGARI):
         return "frustrated"
-    if _WORRIED.search(text):
+    if _hits(text, _WORRIED_LATIN, _WORRIED_DEVANAGARI):
         return "worried"
-    if _CALM.search(text):
+    if _hits(text, _CALM_LATIN, _CALM_DEVANAGARI):
         return "calm"
     return existing
 

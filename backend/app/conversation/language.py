@@ -18,15 +18,54 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
-# explicit language commands (caller names a language)
+# explicit language commands (caller names a language). The trailing cue
+# group is MANDATORY (no trailing "?") — a bare, unguarded language name
+# used to be enough to trigger an instant switch+pin on its own, which
+# false-triggered on any incidental mention. _command() below additionally
+# allows a bare name through when the WHOLE utterance is short (a caller
+# answering "Hindi" or "मराठी" to "which language would you prefer?" has no
+# verb to pair with), and screens every match for a nearby negation first.
 _COMMANDS: dict[str, list[str]] = {
-    "en": [r"\benglish\b.{0,20}(please|me[in]|मध्ये|बोल|talk|speak)?",
+    "en": [r"\benglish\b.{0,20}(please|me[in]|मध्ये|बोल|talk|speak)",
            r"(talk|speak|बोल|बात).{0,15}english", r"english\s*(madhe|mein|me)\b"],
-    "hi": [r"\bhindi\b.{0,20}(please|me[in]|बोल|talk|speak)?", r"हिन्दी|हिंदी",
-           r"(talk|speak|बोल|बात).{0,15}hindi"],
-    "mr": [r"\bmarathi\b.{0,20}(please|madhe|बोल|talk|speak)?", r"मराठी",
-           r"(talk|speak|बोल|बात).{0,15}marathi"],
+    "hi": [r"\bhindi\b.{0,20}(please|me[in]|बोल|talk|speak)",
+           r"(talk|speak|बोल|बात).{0,15}hindi",
+           r"(हिन्दी|हिंदी).{0,15}(बोल|बात|कर)", r"(बोल|बात|कर).{0,15}(हिन्दी|हिंदी)"],
+    "mr": [r"\bmarathi\b.{0,20}(please|madhe|बोल|talk|speak)",
+           r"(talk|speak|बोल|बात).{0,15}marathi",
+           r"(मराठी).{0,15}(बोल|बात|कर)", r"(बोल|बात|कर).{0,15}(मराठी)"],
 }
+# Bare language-name mentions (no verb needed) — only trusted when they are
+# essentially the WHOLE reply (see _SHORT_UTTERANCE_WORDS in _command), e.g.
+# a one-word answer to "which language would you prefer?".
+_BARE_NAME: dict[str, list[str]] = {
+    "en": [r"\benglish\b"],
+    "hi": [r"\bhindi\b", r"हिन्दी", r"हिंदी"],
+    "mr": [r"\bmarathi\b", r"मराठी"],
+}
+# "don't speak Marathi", "मराठी मत बोलो", "not Hindi" — a language name
+# appearing NEGATED is a request to AVOID it, the opposite of a command to
+# switch to it. Real production bug this fixes: a caller saying "मराठी मत
+# बोलो" (don't speak Marathi) was matched as a bare "मराठी" command and
+# switched the call INTO Marathi — exactly backwards from what was asked.
+#
+# Devanagari terms are SUBSTRING-matched, no \b — Python's \w (and therefore
+# \b) does not treat Devanagari vowel signs/anusvara (matras — ी ं etc.) as
+# word characters, so \bनहीं\b silently fails to match "नहीं" at all when it
+# sits between spaces (verified: re.search(r"\bनहीं\b", "मुझे मराठी नहीं
+# आती") is None). Every other Devanagari list in this module (_MR_MARKERS,
+# _HI_MARKERS) already avoids \b for exactly this reason; _NEGATION was the
+# one place that didn't, and its Devanagari matches were silently no-ops
+# until this was found and fixed. "ना" is deliberately excluded — as a bare
+# 2-character substring it hits inside ordinary verb forms (जाना, आना,
+# करना...) far more often than it's actually a negation.
+_NEGATION_DEVANAGARI = ("नहीं", "नाही", "मत", "नको")
+_NEGATION_LATIN = re.compile(r"\b(not|no|don'?t)\b")
+
+
+def _has_negation(window: str) -> bool:
+    return any(n in window for n in _NEGATION_DEVANAGARI) or bool(_NEGATION_LATIN.search(window))
+_SHORT_UTTERANCE_WORDS = 4
 
 # Lexical markers separating Hindi vs Marathi (both Devanagari). These matter
 # more than the STT hint — Sarvam regularly labels Marathi as hi-IN and vice
@@ -184,12 +223,27 @@ class LanguageEngine:
     @staticmethod
     def _command(text: str) -> str | None:
         low = text.lower()
+        is_short = len(low.split()) <= _SHORT_UTTERANCE_WORDS
+
+        def _negated(match: re.Match) -> bool:
+            window = low[max(0, match.start() - 15):match.end() + 15]
+            return _has_negation(window)
+
         for lang, patterns in _COMMANDS.items():
-            if any(re.search(p, low) for p in patterns):
-                # avoid false trigger when caller merely code-mixes the word "english"
-                if lang == "en" and not re.search(r"english", low):
-                    continue
-                return lang
+            for p in patterns:
+                m = re.search(p, low)
+                if m and not _negated(m):
+                    return lang
+        # No verb-paired match — allow a BARE language name through only when
+        # the reply is short enough that the name plausibly IS the whole
+        # answer (e.g. "Hindi", "मराठी", "Marathi please" already handled
+        # above with "please"; this covers the bare one-word case).
+        if is_short:
+            for lang, patterns in _BARE_NAME.items():
+                for p in patterns:
+                    m = re.search(p, low)
+                    if m and not _negated(m):
+                        return lang
         return None
 
     @staticmethod
@@ -203,30 +257,15 @@ class LanguageEngine:
         if not stripped or stripped in _NEUTRAL_FILLERS:
             return "und"
         hint = (stt_hint or "").lower()
-        # Hindi/Marathi hints are NOT trusted blindly — Sarvam mislabels these
-        # two constantly (same script). The WORDS decide; the hint only breaks
-        # ties. This was the root cause of hi/mr mixing mid-call.
-        if hint.startswith(("mr", "hi")) and _DEVANAGARI.search(text):
-            mr = sum(text.count(m) for m in _MR_MARKERS)
-            hi = sum(text.count(m) for m in _HI_MARKERS)
-            if mr > hi:
-                return "mr"
-            if hi > mr:
-                return "hi"
-            return "mr" if hint.startswith("mr") else "hi"   # tie → trust hint
-        if hint.startswith("mr"):
-            return "mr"
-        if hint.startswith("hi"):
-            return "hi"
-        if hint.startswith("en"):
-            # STT says English but script may disagree; verify below
-            if not _DEVANAGARI.search(text):
-                low = text.lower()
-                if sum(m in low for m in _ROM_MR) >= 2:
-                    return "mr"
-                if sum(m in low for m in _ROM_HI) >= 2:
-                    return "hi"
-                return "en"
+
+        # Devanagari script → Hindi vs Marathi is decided ENTIRELY by marker
+        # words, NEVER by STT's hi/mr hint, including as a tie-breaker.
+        # Sarvam "regularly labels Marathi as hi-IN and vice versa" (see
+        # module docstring) — trusting that hint on a tie was gambling with a
+        # signal the code's own comments say is unreliable. A genuine tie
+        # (0-0 included, e.g. a short reply with no distinguishing word)
+        # casts NO vote and leaves the active language exactly where it was,
+        # rather than risking a switch on a coin-flip.
         if _DEVANAGARI.search(text):
             mr = sum(text.count(m) for m in _MR_MARKERS)
             hi = sum(text.count(m) for m in _HI_MARKERS)
@@ -234,7 +273,17 @@ class LanguageEngine:
                 return "mr"
             if hi > mr:
                 return "hi"
-            return "hi" if hint.startswith("hi") else ("mr" if hint.startswith("mr") else "und")
+            return "und"
+
+        # Latin script: romanized Hindi/Marathi markers are checked FIRST,
+        # regardless of what the hint says — the old code trusted a bare
+        # hint="mr"/"hi" here with NO romanized-marker check at all (only the
+        # hint="en" path verified against romanized markers), so romanized
+        # Hindi/Marathi mislabelled "mr-IN"/"hi-IN" by Sarvam went straight
+        # through unchecked. Only once markers are silent does the hint speak
+        # — and only for "en", which isn't systematically confused with
+        # anything; an hi/mr hint with zero supporting markers still casts no
+        # vote, same reasoning as the Devanagari tie above.
         if _LATIN.search(text):
             low = text.lower()
             mr = sum(m in low for m in _ROM_MR)
@@ -243,5 +292,8 @@ class LanguageEngine:
                 return "mr"
             if hi >= 2 and hi > mr:
                 return "hi"
+            if hint.startswith(("hi", "mr")):
+                return "und"
             return "en"
+
         return "und"
