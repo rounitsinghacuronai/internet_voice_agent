@@ -129,6 +129,14 @@ class TelecomServices:
               preferred_slot TEXT, caller_number TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS feedback(
               id TEXT PRIMARY KEY, rating TEXT, comment TEXT, created_at TEXT);
+            -- Learned per-customer language preference (hi/mr/en), set at the end
+            -- of any call where the Language Engine confidently resolved one.
+            -- Deliberately its OWN table, not a column on `customers`: that table
+            -- is STATIC reference data re-seeded with INSERT OR REPLACE on every
+            -- startup (see below) — a column there would be silently wiped on
+            -- every deploy/restart, losing what was just learned.
+            CREATE TABLE IF NOT EXISTS customer_language(
+              account_no TEXT PRIMARY KEY, language TEXT, updated_at TEXT);
             """)
             # Migration: pincode was added to new_connections after the table
             # already existed on production (and any dev) telecom.db, so
@@ -165,11 +173,37 @@ class TelecomServices:
             if row is None and mobile:
                 row = c.execute("SELECT * FROM customers WHERE mobile=?",
                                 (mobile.strip(),)).fetchone()
-        if row is None:
-            return {"verified": False, "reason": "No customer found for the given number."}
+            if row is None:
+                return {"verified": False, "reason": "No customer found for the given number."}
+            lang_row = c.execute(
+                "SELECT language FROM customer_language WHERE account_no=?",
+                (row["account_no"],)).fetchone()
         return {"verified": True, "account_no": row["account_no"], "name": row["name"],
                 "mobile": row["mobile"], "address": row["address"],
-                "service_type": row["service_type"], "plan_name": row["plan_name"]}
+                "service_type": row["service_type"], "plan_name": row["plan_name"],
+                "preferred_language": lang_row["language"] if lang_row else None}
+
+    def set_preferred_language(self, account_no: str, language: str) -> dict:
+        """Remember which language a VERIFIED customer's call resolved to, so
+        their NEXT call can open in it instead of the house default. Called
+        internally at call teardown (conversation manager), never by the LLM.
+
+        Real production case: a recognized returning caller (established
+        Hindi across several earlier calls) had their very first utterance on
+        a new call mis-transcribed into the wrong script entirely (Sarvam
+        auto-detect hallucinating Punjabi), so the Language Engine correctly
+        registered no signal — and with nothing else to go on, the reply
+        defaulted to the deployment's Marathi house default instead of the
+        Hindi this caller always actually uses."""
+        if not account_no or language not in ("hi", "mr", "en"):
+            return {"updated": False}
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO customer_language(account_no, language, updated_at) "
+                "VALUES (?,?,?) ON CONFLICT(account_no) DO UPDATE SET "
+                "language=excluded.language, updated_at=excluded.updated_at",
+                (account_no, language, datetime.now().isoformat()))
+        return {"updated": True, "account_no": account_no, "language": language}
 
     def send_otp(self, mobile: str) -> dict:
         otp = f"{random.randint(0, 999999):06d}"

@@ -371,8 +371,39 @@ class ConversationManager:
             return None
         self.memory.absorb_tool_result("verify_customer", {}, res)
         self._caller_recognized = True
+        # Seed the Language Engine from what THIS customer's language resolved
+        # to on a previous call, if we have one on file. Real production case:
+        # a recognized returning caller (Hindi established across several
+        # earlier calls) had their opening line on a new call mis-transcribed
+        # into the wrong script by STT auto-detect — the Language Engine
+        # correctly registered no signal from that garbled text, but with
+        # nothing else to go on the reply fell back to the deployment's
+        # Marathi house default instead of the Hindi this caller always
+        # actually uses. Left UNPINNED so the caller can still be followed to
+        # a genuinely different language this call, same as any other start.
+        pref_lang = res.get("preferred_language")
+        if pref_lang in ("hi", "mr", "en"):
+            self.lang.language = pref_lang
+            self.lang.pinned = False
+            self.memory.language = pref_lang
         name = res.get("name") or ""
         return name.split()[0] if name else None
+
+    def persist_language_preference(self) -> None:
+        """Remember this call's resolved language for next time (see
+        recognize_caller's seeding above). Call at teardown; must never raise
+        — a storage hiccup here must not affect the call that already ended.
+        Only writes when the Language Engine actually resolved a real
+        language (never "und") for a VERIFIED customer, so a short call that
+        never got a clean signal can't overwrite a good, previously-learned
+        preference with nothing."""
+        try:
+            lang = self.memory.language
+            account_no = self.memory.account_no
+            if self.memory.verified and account_no and lang in ("hi", "mr", "en"):
+                self.tools.svc.set_preferred_language(account_no, lang)
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed to persist language preference: %s", e)
 
     def greeting(self, caller_first_name: str | None = None) -> TurnChunk:
         text = (self.persona.personal_greeting(caller_first_name)

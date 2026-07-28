@@ -351,6 +351,14 @@ class VoiceSession:
                 transcript=history, tools=tools, avg_latency_ms=avg_latency)
         except Exception:  # noqa: BLE001
             pass
+        # Remember this call's resolved language for a verified customer, so
+        # their NEXT call can open in it instead of the house default (see
+        # ConversationManager.persist_language_preference's docstring for the
+        # production evidence). Never allowed to affect teardown.
+        try:
+            self.manager.persist_language_preference()
+        except Exception:  # noqa: BLE001
+            pass
         self.sm.transition(CallState.IDLE, "call_ended")
         for t in (
             self._active_turn_task,
