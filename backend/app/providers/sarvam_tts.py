@@ -197,8 +197,20 @@ class SarvamTTS:
                 return
             except Exception as e:
                 if got_any:
-                    log.warning("tts-stream: failed mid-stream (%s)", e)
-                    return                          # partial audio already sent
+                    # Partial audio already sent — re-synthesizing and sending
+                    # the FULL text now would repeat/overlap the part the
+                    # caller already heard, which is worse than the truncation.
+                    # But leaving stream mode ON risks the SAME silent
+                    # mid-sentence cutoff on every following sentence too if
+                    # the connection is genuinely degraded (not a one-off) —
+                    # so disable streaming for the rest of THIS call, same as
+                    # the "failed before first chunk" branch below, and let
+                    # every subsequent sentence use the more reliable REST path.
+                    log.warning("tts-stream: failed mid-stream (%s) — this "
+                                "sentence was truncated; disabling stream mode "
+                                "for the rest of this session (REST fallback)", e)
+                    self._stream_disabled = True
+                    return
                 log.warning("tts-stream: failed before first chunk (%s) — REST "
                             "fallback for this session", e)
                 self._stream_disabled = True

@@ -1065,6 +1065,24 @@ class VoiceSession:
                 self._advance_playhead(pcm)
                 self._log_first_audio_latency(t_tts)
             await self._send({"type": "audio_end"})
+            # OBSERVABILITY: _log_first_audio_latency only logs once per TURN
+            # (the first sentence), so a slow LATER sentence in a multi-sentence
+            # turn was previously invisible — production case (session
+            # acbfc95ee8dc): "turn 6 done" logged, then nothing until "draining
+            # playback" a full ~11s later, for a reply whose own audio only
+            # plays ~6-7s — meaning synthesis+streaming ran well behind
+            # real-time for one of that turn's sentences, with zero log
+            # evidence of which one or why. Flag any single sentence whose
+            # synthesis+send took unusually long, so next time this is
+            # pinpointable instead of a silent multi-second gap.
+            sentence_ms = (time.monotonic() - t_tts) * 1000
+            if sentence_ms > 2000:
+                log.warning(
+                    "session %s: sentence TTS took %.0fms (%d chars) — "
+                    "slower than real-time, likely audible as a stall/gap "
+                    "to the caller", self.session_id, sentence_ms,
+                    len(chunk.text or ""),
+                )
         except asyncio.CancelledError:
             try:
                 await self._send({"type": "audio_end"})
