@@ -180,3 +180,67 @@ def test_romanized_no_markers_with_hi_mr_hint_casts_no_vote():
     # Pure Latin, no romanized hi/mr markers at all, but hint claims hi/mr —
     # per the same "hi/mr hint is unreliable" reasoning, cast no vote.
     assert LanguageEngine._detect("okay done thanks bye", "mr-IN") == "und"
+
+
+# ── production log e254be2a350f: false hi -> en drift during PIN-code capture ─
+# A caller reading their 6-digit address PIN code digit-by-digit hit STT noise
+# ("Eight" for a real digit, then "charging" — almost certainly more noise
+# from the same digit-reading) that scored two consecutive weak "en" votes and
+# incorrectly drifted an active Hindi call to English mid-capture. Two
+# complementary fixes: (1) a bare digit word/phrase never carries language
+# signal at all, in _detect(); (2) while a number is actively being captured,
+# only a STRONG signal can move the language — weak/ambiguous votes (like a
+# lone garbled non-digit word) are dropped instead of accumulating.
+
+def test_bare_digit_word_casts_no_vote():
+    for text in ("eight", "Eight", "one two three", "double three", "आठ", "दो"):
+        assert LanguageEngine._detect(text, "unknown") == "und", text
+
+
+def test_bare_digit_word_does_not_accumulate_toward_a_switch():
+    eng = LanguageEngine()
+    _hindi_seed(eng)
+    eng.update("Eight", "unknown")
+    eng.update("Eight", "unknown")
+    eng.update("Eight", "unknown")
+    assert eng.language == "hi"
+
+
+def test_repeated_single_filler_word_casts_no_vote():
+    """'hello hello hello' — the whole-string filler check only matches ONE
+    bare occurrence; the repeated form must also be neutral."""
+    assert LanguageEngine._detect("hello hello hello", "unknown") == "und"
+    assert LanguageEngine._detect("hi hi", "unknown") == "und"
+
+
+def test_production_case_eight_then_charging_does_not_drift_when_suppressed():
+    """The exact evidenced sequence: mid PIN-code capture, 'Eight' (now
+    neutral on its own) then 'charging' (a lone non-digit garbled word) must
+    never combine into a switch when suppress_weak=True (i.e. the number
+    buffer is active for this call)."""
+    eng = LanguageEngine()
+    _hindi_seed(eng)
+    eng.update("Eight", "unknown", suppress_weak=True)
+    eng.update("charging", "unknown", suppress_weak=True)
+    assert eng.language == "hi"
+
+
+def test_weak_vote_suppression_only_applies_when_requested():
+    """Without suppress_weak (caller NOT mid-number-capture), the pre-existing
+    2-consecutive-weak-vote hysteresis still functions normally — this isn't
+    a blanket change to weak-vote handling, only a capture-time guard."""
+    eng = LanguageEngine()
+    _hindi_seed(eng)
+    eng.update("charging", "unknown")
+    eng.update("morning", "unknown")   # a second, different weak "en" word
+    assert eng.language == "en"
+
+
+def test_strong_signal_still_switches_even_during_suppressed_capture():
+    """A genuine, unambiguous language statement mid-capture must still be
+    honoured immediately — suppression only blocks WEAK/ambiguous votes."""
+    eng = LanguageEngine()
+    _hindi_seed(eng)
+    result = eng.update("Can you please check my broadband connection status",
+                        "en-IN", suppress_weak=True)
+    assert result == "en"

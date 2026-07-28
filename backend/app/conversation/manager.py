@@ -460,7 +460,13 @@ class ConversationManager:
                 getattr(self.memory, nb.field, None)
                 or (nb.field == "account_no" and self.memory.verified)):
             nb.clear()
-        active_lang = self.lang.update(user_text, stt_lang)
+        # Reaching run_turn at all while a number is mid-capture already means
+        # this utterance failed ws_voice.py's own "looks like a digit
+        # fragment" check — so it's very likely more STT noise from the same
+        # digit-reading (see LanguageEngine.update()'s suppress_weak docstring
+        # for the production evidence), not a deliberate language statement.
+        active_lang = self.lang.update(
+            user_text, stt_lang, suppress_weak=self.memory.number_buffer.active)
         self.memory.language = active_lang
         self.memory.history.append({"role": "user", "content": user_text})
 

@@ -16,6 +16,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from .numbers import looks_like_number_fragment
+
 log = logging.getLogger(__name__)
 
 # explicit language commands (caller names a language). The trailing cue
@@ -102,6 +104,11 @@ _NEUTRAL_FILLERS = {
     "hello", "hi", "hey", "hmm", "hm", "mm", "mhm", "uh", "um", "uhh", "umm",
     "ok", "okay", "yes", "no", "bye", "thanks", "thank you", "thankyou",
 }
+# Single-word subset — also catches a REPEATED filler ("hello hello hello",
+# real production case: STT echoes a word a few times while the caller
+# pauses or the line briefly hangs). The whole-string check above only
+# matches ONE bare occurrence, not several run together.
+_NEUTRAL_FILLER_WORDS = {f for f in _NEUTRAL_FILLERS if " " not in f}
 
 
 _ASK_TURNS = 3   # consecutive indeterminate turns before we ever ask outright
@@ -114,8 +121,25 @@ class LanguageEngine:
     _streak: dict = field(default_factory=dict)   # candidate → consecutive turns
     _und_turns: int = 0            # consecutive turns we truly could not detect anything
 
-    def update(self, text: str, stt_hint: str = "unknown") -> str:
-        """Call once per user utterance. Returns the active language."""
+    def update(self, text: str, stt_hint: str = "unknown",
+              suppress_weak: bool = False) -> str:
+        """Call once per user utterance. Returns the active language.
+
+        `suppress_weak`: pass True while a number capture is actively in
+        progress (CallMemory.number_buffer.active). An utterance that
+        reaches here at all despite that already failed the Number
+        Recognition Engine's own "looks like a digit fragment" check (that
+        path never calls into run_turn()/this method — see ws_voice.py) —
+        so if it STILL doesn't carry a clear, strong language signal, it is
+        overwhelmingly likely to be more STT noise from the same
+        digit-reading (a hallucinated stray word from mumbling/a pause),
+        not a genuine language statement. Real production case: mid PIN-
+        code capture, 'Eight' then 'charging' each scored a weak vote and,
+        together, incorrectly drifted the whole call from Hindi to English.
+        With this on, only a STRONG signal (an unambiguous whole-utterance
+        switch, or an explicit command via _command()) can move the
+        language while capture is in progress; weak/ambiguous votes are
+        dropped instead of accumulating toward a switch."""
         cmd = self._command(text)
         if cmd:
             if cmd != self.language:
@@ -153,7 +177,10 @@ class LanguageEngine:
                     self._streak.clear()
                 return self.language
             # WEAK/ambiguous signal (stray word, garbled STT) → old hysteresis:
-            # 2 consecutive turns (3 if pinned) before following.
+            # 2 consecutive turns (3 if pinned) before following. Mid-number-
+            # capture, don't even let it accumulate — see suppress_weak above.
+            if suppress_weak:
+                return self.language
             self._streak[detected] = self._streak.get(detected, 0) + 1
             self._streak = {detected: self._streak[detected]}
             need = 3 if self.pinned else 2      # pinned language is stickier
@@ -255,6 +282,21 @@ class LanguageEngine:
         # read as a confident "caller is speaking English").
         stripped = re.sub(r"[^\w\s]", "", text.strip().lower())
         if not stripped or stripped in _NEUTRAL_FILLERS:
+            return "und"
+        words = stripped.split()
+        if words and all(w in _NEUTRAL_FILLER_WORDS for w in words):
+            return "und"
+        # A bare spoken NUMBER ("eight", "double three", "आठ") carries no
+        # language signal — it's a digit, not a language choice. Real
+        # production bug this fixes: a caller reading their PIN code
+        # digit-by-digit said "Eight" (STT, hint=unknown) between longer
+        # utterances; with nothing else to go on this fell through to the
+        # Latin-script branch below and scored a full confident "en" vote,
+        # priming the hysteresis streak that a SECOND unrelated garbled word
+        # ("charging" — almost certainly more STT noise from the same
+        # digit-reading, not real speech) then tipped over, incorrectly
+        # drifting the whole call from Hindi to English mid pincode-capture.
+        if looks_like_number_fragment(text):
             return "und"
         hint = (stt_hint or "").lower()
 
