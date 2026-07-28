@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # ── persona (single source of identity — see backend/app/persona.py) ──
     # Changing ONLY these transforms the whole assistant: name, greeting,
     # first-person grammar in Marathi/Hindi, prompts, and default voice.
-    agent_name: str = "Ratan"
+    agent_name: str = "Kartik"
     agent_gender: str = "male"         # male | female
     agent_role: str = "customer care executive"
 

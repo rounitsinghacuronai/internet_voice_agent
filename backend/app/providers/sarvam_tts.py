@@ -220,7 +220,7 @@ class SarvamTTS:
           WAV output is self-describing (sample rate parsed from the header),
           so mismatched rates are resampled instead of playing chipmunked."""
         from sarvamai import AsyncSarvamAI, AudioOutput   # optional dependency
-        from ..telephony.resample import resample_pcm16
+        from ..telephony.resample import StreamResampler
         if self._stream_client is None:
             self._stream_client = AsyncSarvamAI(
                 api_subscription_key=self.s.sarvam_api_key)
@@ -244,6 +244,13 @@ class SarvamTTS:
         for extras, assumed_rate in attempts:
             got_audio = False
             src_rate = assumed_rate
+            # Stateful — see StreamResampler — so the many small WAV chunks
+            # Sarvam streams for ONE sentence resample as one continuous
+            # signal instead of each independently restarting the
+            # interpolation reference (a click at every chunk boundary,
+            # compounding with the second independent resample this PCM
+            # gets in ExotelTransport.send_bytes downstream).
+            resampler: StreamResampler | None = None
             try:
                 async with self._stream_client.text_to_speech_streaming.connect(
                         model=self.s.tts_model, send_completion_event=True) as ws:
@@ -270,8 +277,10 @@ class SarvamTTS:
                             if pcm:
                                 got_audio = True
                                 if src_rate and src_rate != self.s.tts_sample_rate:
-                                    pcm = resample_pcm16(
-                                        pcm, src_rate, self.s.tts_sample_rate)
+                                    if resampler is None or resampler.src_rate != src_rate:
+                                        resampler = StreamResampler(
+                                            src_rate, self.s.tts_sample_rate)
+                                    pcm = resampler.process(pcm)
                                 yield pcm
                         else:
                             ev = getattr(getattr(message, "data", None),

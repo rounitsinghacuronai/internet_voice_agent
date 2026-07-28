@@ -4,7 +4,7 @@ Every identity-bearing string in the application (name, gender, greetings,
 first-person grammar, safety lines, prompt identity block, default TTS voice)
 is GENERATED here from three environment variables:
 
-    AGENT_NAME=Ratan
+    AGENT_NAME=Kartik
     AGENT_GENDER=male        # male | female
     AGENT_ROLE=customer care executive
 
@@ -307,7 +307,7 @@ def get_persona(settings) -> PersonaContext:
     if gender not in (MALE, FEMALE):
         log.warning("persona: AGENT_GENDER=%r invalid — defaulting to male", gender)
         gender = MALE
-    name = (getattr(settings, "agent_name", "") or "Ratan").strip()
+    name = (getattr(settings, "agent_name", "") or "Kartik").strip()
     role = (getattr(settings, "agent_role", "") or "customer care executive").strip()
     voice = (getattr(settings, "tts_speaker", "") or "").strip() or _DEFAULT_VOICE[gender]
     return _cached(name, gender, role, voice)

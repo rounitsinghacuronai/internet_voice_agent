@@ -47,7 +47,7 @@ from fastapi import APIRouter, WebSocket
 
 from ..api.ws_voice import VoiceSession
 from ..config import Settings
-from .resample import resample_pcm16
+from .resample import StreamResampler
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -142,6 +142,14 @@ class ExotelTransport:
         # tells us definitively whether Exotel ever streamed caller audio.
         self._rx_events: dict[str, int] = {}
 
+        # Stateful streaming resamplers (see resample.StreamResampler) — one
+        # per direction, carrying interpolation continuity across chunks so
+        # consecutive media frames don't click at their boundary. Built
+        # lazily on first use because leg_rate can still change when the
+        # `start` message arrives (self._on_start below) after __init__.
+        self._out_resampler: StreamResampler | None = None   # tts_rate -> leg_rate
+        self._in_resampler: StreamResampler | None = None    # leg_rate -> input_sample_rate
+
     # ── VoiceSession-facing interface ──────────────────────────────────────────
 
     async def accept(self) -> None:
@@ -228,8 +236,11 @@ class ExotelTransport:
                 if pcm is None:
                     continue
                 # Upsample the phone leg to our 16 kHz STT/VAD rate (passthrough
-                # when the leg is already 16 kHz).
-                pcm16 = resample_pcm16(pcm, self.leg_rate, self.s.input_sample_rate)
+                # when the leg is already 16 kHz). Stateful — see StreamResampler
+                # — so consecutive inbound media frames don't click at the seam.
+                if self._in_resampler is None:
+                    self._in_resampler = StreamResampler(self.leg_rate, self.s.input_sample_rate)
+                pcm16 = self._in_resampler.process(pcm)
                 return {"type": "websocket.receive", "bytes": pcm16}
             elif event == "stop":
                 log.info("exotel stop: reason=%r | rx events=%s | tx media msgs=%d",
@@ -291,10 +302,18 @@ class ExotelTransport:
             await self._flush_out(force=True)
 
     async def send_bytes(self, pcm: bytes) -> None:
-        """TTS PCM (24 kHz) → resample to the leg rate, buffer, emit full chunks."""
+        """TTS PCM (24 kHz) → resample to the leg rate, buffer, emit full chunks.
+
+        Stateful resampling (StreamResampler) — each call here is ONE
+        streaming TTS chunk, not the whole sentence, so resampling each
+        independently (as the old stateless resample_pcm16 did) put a small
+        phase discontinuity at every chunk boundary — audible as clicking/
+        crackling over the course of a sentence."""
         if self._closed or self.stream_sid is None:
             return
-        self._out_buf.extend(resample_pcm16(pcm, self._tts_rate, self.leg_rate))
+        if self._out_resampler is None:
+            self._out_resampler = StreamResampler(self._tts_rate, self.leg_rate)
+        self._out_buf.extend(self._out_resampler.process(pcm))
         await self._flush_out(force=False)
 
     async def close(self) -> None:
