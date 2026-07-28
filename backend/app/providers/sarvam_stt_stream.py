@@ -56,6 +56,7 @@ class SarvamSTTStream:
         self._final_evt = asyncio.Event()
         self._lang = None                        # language the socket was opened with
         self._early_flushed_at: float = 0.0      # monotonic time of last early flush
+        self._audio_since_flush = False          # any audio sent since the last flush?
         self.disabled = False                    # tripped on any error → REST only
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -101,7 +102,17 @@ class SarvamSTTStream:
             while True:
                 pcm = await self._q.get()
                 if pcm is None:                          # flush marker
+                    # Sarvam raises "Cannot flush: no audio input has been
+                    # received" if we flush before ANY audio has gone out on the
+                    # socket — which happened right after the greeting (an early
+                    # flush fires while the caller is still silent). That single
+                    # exception used to disable the whole stream for the rest of
+                    # the call and drop it to the slower REST path. A flush with
+                    # nothing buffered is simply a no-op, so skip it.
+                    if not self._audio_since_flush:
+                        continue
                     await self._ws.flush()
+                    self._audio_since_flush = False
                     continue
                 # NOTE: the SDK's AudioData schema only accepts the literal
                 # "audio/wav" for `encoding` (confirmed by its own pydantic
@@ -112,6 +123,7 @@ class SarvamSTTStream:
                     encoding="audio/wav",
                     sample_rate=self.s.input_sample_rate,
                 )
+                self._audio_since_flush = True
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -160,6 +172,9 @@ class SarvamSTTStream:
         self._parts.clear()
         self._final_evt.clear()
         self._early_flushed_at = 0.0
+        # Buffer was dropped → whatever was 'sent' is moot; the NEXT flush must be
+        # treated as flush-before-audio (no-op) until real audio flows again.
+        self._audio_since_flush = False
         # Drop any locally-queued (not-yet-sent) audio frames from the greeting.
         try:
             while True:

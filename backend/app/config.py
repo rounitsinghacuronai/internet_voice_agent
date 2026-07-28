@@ -250,8 +250,12 @@ class Settings(BaseSettings):
     speech_llm_restructure: bool = False
     # Per-utterance pace bounds (absolute Sarvam pace). The Voice Director's
     # style pace multiplies Settings.tts_pace and is clamped into this range.
-    speech_pace_min: float = 0.7
-    speech_pace_max: float = 1.15
+    # Kept NARROW on purpose: a wide band makes the delta between a plain
+    # sentence and a number-carrying one (number_pace×base) large enough to be
+    # heard as the voice speeding up / slowing down between sentences. 0.9–1.08
+    # keeps numbers slightly-slower-for-clarity without any line sounding rushed.
+    speech_pace_min: float = 0.9
+    speech_pace_max: float = 1.08
 
     # ── conversation ──
     max_tool_rounds: int = 4

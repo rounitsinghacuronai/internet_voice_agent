@@ -134,9 +134,23 @@ class SarvamTTS:
             if not audios:
                 raise ProviderError("sarvam_tts", "empty audio")
             wav = base64.b64decode(audios[0])
-            pcm = _strip_wav_header(wav)
+            # Parse the header instead of blindly stripping it: Sarvam does not
+            # always honour the requested `speech_sample_rate`, and the REST path
+            # (unlike _synthesize_ws) used to ASSUME the PCM was already at
+            # tts_sample_rate. When the returned rate differed, the audio played
+            # back at the wrong SPEED (too fast/chipmunked or too slow/dragging)
+            # with no resample — a direct cause of the "sometimes too fast,
+            # sometimes too slow" complaint. Resample to our canonical rate so
+            # everything downstream (loudness, Exotel leg resampler) is correct.
+            pcm, hdr_rate = _parse_wav(wav)
             if not pcm:
                 raise ProviderError("sarvam_tts", "WAV contained no PCM data")
+            if hdr_rate and hdr_rate != self.s.tts_sample_rate:
+                from ..telephony.resample import resample_pcm16
+                log.warning("sarvam_tts: REST returned %d Hz but pipeline expects "
+                            "%d Hz — resampling (else playback speed is wrong)",
+                            hdr_rate, self.s.tts_sample_rate)
+                pcm = resample_pcm16(pcm, hdr_rate, self.s.tts_sample_rate)
             self._cache[key] = pcm
             while len(self._cache) > 256:
                 self._cache.popitem(last=False)

@@ -1057,15 +1057,20 @@ class VoiceSession:
             await self._send(msg)
             await self._send({"type": "audio_start"})
             t_tts = time.monotonic()
+            first_audio_ms: float | None = None
+            audio_bytes = 0
             if self._loudness is not None:
                 self._loudness.start_sentence()
             async for pcm in self.deps.tts.synthesize(
                 chunk.text, chunk.language, chunk.pace
             ):
+                if first_audio_ms is None:
+                    first_audio_ms = (time.monotonic() - t_tts) * 1000
                 # Steady the per-sentence loudness BEFORE anything downstream sees
                 # it, so the caller and the AEC reference get the same leveled audio.
                 if self._loudness is not None:
                     pcm = self._loudness.process(pcm)
+                audio_bytes += len(pcm)
                 # Feed TTS PCM as AEC reference BEFORE sending to client so the
                 # reference buffer stays synchronised with what the speaker plays.
                 self.pipeline.feed_tts_reference(pcm, self.s.tts_sample_rate)
@@ -1073,23 +1078,29 @@ class VoiceSession:
                 self._advance_playhead(pcm)
                 self._log_first_audio_latency(t_tts)
             await self._send({"type": "audio_end"})
-            # OBSERVABILITY: _log_first_audio_latency only logs once per TURN
-            # (the first sentence), so a slow LATER sentence in a multi-sentence
-            # turn was previously invisible — production case (session
-            # acbfc95ee8dc): "turn 6 done" logged, then nothing until "draining
-            # playback" a full ~11s later, for a reply whose own audio only
-            # plays ~6-7s — meaning synthesis+streaming ran well behind
-            # real-time for one of that turn's sentences, with zero log
-            # evidence of which one or why. Flag any single sentence whose
-            # synthesis+send took unusually long, so next time this is
-            # pinpointable instead of a silent multi-second gap.
-            sentence_ms = (time.monotonic() - t_tts) * 1000
-            if sentence_ms > 2000:
+            # OBSERVABILITY — did the caller actually hear a gap?
+            #
+            # The old metric was `wall_clock > 2000ms`, which was WRONG: the
+            # outbound leg (ExotelTransport._pace) intentionally sleeps to stream
+            # audio at real time, so wall-clock ≈ synthesis latency + the audio's
+            # own play duration. That made a 7-second sentence trip the warning
+            # every time — even on a CACHE HIT that synthesized in ~0 ms (seen in
+            # prod as "sentence TTS took 12520ms (110 chars)" one line after
+            # "CACHE HIT, 0 billed"). Pure noise, and it hid the real stalls.
+            #
+            # A genuine stall is when wall-clock exceeds the audio's own duration
+            # by more than the pacing lead — i.e. we spent real time NOT playing
+            # audio (slow synthesis, or a mid-stream gap). Compute that directly
+            # and report first-audio latency (the true synthesis TTFB) alongside.
+            audio_s = audio_bytes / 2.0 / max(1, self.s.tts_sample_rate)
+            wall_s = time.monotonic() - t_tts
+            lag_s = wall_s - audio_s          # time not covered by played audio
+            if lag_s > 1.5:
                 log.warning(
-                    "session %s: sentence TTS took %.0fms (%d chars) — "
-                    "slower than real-time, likely audible as a stall/gap "
-                    "to the caller", self.session_id, sentence_ms,
-                    len(chunk.text or ""),
+                    "session %s: TTS fell behind real-time by %.0fms "
+                    "(first-audio %.0fms, %.1fs of audio, %d chars) — caller "
+                    "likely heard a stall/gap", self.session_id, lag_s * 1000,
+                    first_audio_ms or 0.0, audio_s, len(chunk.text or ""),
                 )
         except asyncio.CancelledError:
             try:

@@ -89,7 +89,15 @@ _MAX_SEND = 32000     # raw bytes; ~43 kB after base64, well under the 100 kB ca
 # more than _LEAD_S seconds ahead of real-time playback: enough headroom that
 # the caller never hears a gap, small enough that Exotel is never flooded —
 # and barge-in `clear` only ever has ≲1 s of buffered audio to discard.
-_LEAD_S = 1.0
+# 2.0 s (was 1.0 s): with only 1 s of headroom, any synthesis stall longer than a
+# second — a slow REST round-trip, or the gap while the NEXT sentence of a
+# multi-sentence turn is still synthesizing — drained the phone-leg buffer to
+# empty. That underflow is a click/crackle + gap, and it lands right when a
+# differently-paced sentence begins: exactly the "voice cracking in between when
+# the speed flutters" report. 2 s of lead rides through those stalls; still far
+# under Exotel's limits and still 320-byte-chunked, so barge-in `clear` stays
+# effectively instant (it only ever discards ≤_LEAD_S of buffered audio).
+_LEAD_S = 2.0
 # Per-message audio duration. Small messages also make `clear` act instantly.
 _CHUNK_S = 0.4
 

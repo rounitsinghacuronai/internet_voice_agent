@@ -455,13 +455,41 @@ class TelecomServices:
         can filter/route by serviceable area. Both mobile and pincode have
         already passed the registry's number-format gate (10-digit 6/7/8/9
         mobile, 6-digit non-zero-leading PIN) before this method ever runs."""
-        app_no = f"NC{datetime.now():%y%m}{uuid.uuid4().hex[:6].upper()}"
+        now = datetime.now()
+        name_s, addr_s = name.strip(), address.strip()
+        pin_s, svc_s = (pincode or "").strip(), service_type.strip()
+        mob_s, caller_s = (contact_mobile or "").strip(), (caller_number or "").strip()
+        # IDEMPOTENCY. The LLM can legitimately call this tool more than once for
+        # a SINGLE request: a barge-in can cancel the turn AFTER the tool already
+        # ran but BEFORE the confirmation was spoken, so the flow re-asks and
+        # registers again (seen in production: NC…62E41 then NC…9F561 for one
+        # caller, one address — two applications, two ops WhatsApp pings, one
+        # real customer). If an identical request (same name + contact + pincode
+        # + service, or same caller number) was logged in the last few minutes,
+        # return that application instead of minting a duplicate.
         with self._conn() as c:
+            cutoff = (now - timedelta(minutes=15)).isoformat()
+            existing = c.execute(
+                "SELECT application_no FROM new_connections WHERE created_at>=? AND ("
+                "  (name=? AND contact_mobile=? AND pincode=? AND service_type=?)"
+                "  OR (caller_number!='' AND caller_number=? AND service_type=?)"
+                ") ORDER BY created_at DESC LIMIT 1",
+                (cutoff, name_s, mob_s, pin_s, svc_s, caller_s, svc_s)).fetchone()
+            if existing:
+                app_no = existing["application_no"]
+                log.info("NEW CONNECTION (dedup) %s: returning existing application "
+                         "for repeat request %s / %s @ %s", app_no, name_s, svc_s, pin_s)
+                return {"registered": True, "application_no": app_no,
+                        "name": name, "service_type": service_type, "plan": plan,
+                        "address": address, "pincode": pincode,
+                        "contact_mobile": contact_mobile, "preferred_slot": preferred_slot,
+                        "duplicate_suppressed": True,
+                        "note": "This request was already logged moments ago — reusing the "
+                                "same application number instead of creating a duplicate."}
+            app_no = f"NC{now:%y%m}{uuid.uuid4().hex[:6].upper()}"
             c.execute("INSERT INTO new_connections VALUES (?,?,?,?,?,?,?,?,?,?)",
-                      (app_no, name.strip(), address.strip(), (pincode or "").strip(),
-                       service_type.strip(), plan.strip(),
-                       (contact_mobile or "").strip(), preferred_slot.strip(),
-                       (caller_number or "").strip(), datetime.now().isoformat()))
+                      (app_no, name_s, addr_s, pin_s, svc_s, plan.strip(),
+                       mob_s, preferred_slot.strip(), caller_s, now.isoformat()))
         log.info("NEW CONNECTION %s: %s / %s / %s @ %s - %s", app_no, name,
                  service_type, plan, address, pincode)
         return {"registered": True, "application_no": app_no,
