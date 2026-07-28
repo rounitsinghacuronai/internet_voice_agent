@@ -99,6 +99,31 @@ def _promised_transfer(text: str) -> bool:
     forgot to actually perform (no transfer_to_senior_executive call)."""
     return bool(text and _CONNECT_VERB.search(text) and _HUMAN_REQUEST.search(text))
 
+
+# Same AND-gate pattern as the transfer-promise detector above, for a real
+# production bug found in session acbfc95ee8dc: the agent said 'मैं ...
+# दर्ज कर रहा हूँ' (I'm registering this) TWICE in one call, describing a
+# new-connection request as already being submitted, and promised the caller
+# an application number — but register_new_connection was never called
+# either time (tools=none both turns). The caller was told a request existed
+# that never actually did. Devanagari terms are plain substring alternation
+# (no \b — see the module-wide note on \b + Devanagari combining marks in
+# language.py), so no boundary issue here.
+_REGISTER_VERB = re.compile(
+    r"(दर्ज कर|रजिस्टर कर|नोंद कर|नोंदव|submit(?:ting|ted)?|regist(?:er|ering|ered))",
+    re.IGNORECASE)
+_NEW_CONNECTION_NOUN = re.compile(
+    r"(नया कनेक्शन|नयी कनेक्शन|नवीन कनेक्शन|नवीन जोडणी|नव्या जोडणी|"
+    r"अनुरोध|आवेदन|अर्जी|application|new connection)",
+    re.IGNORECASE)
+
+
+def _promised_new_connection(text: str) -> bool:
+    """True when a spoken line claims a new-connection request is being
+    registered/submitted — catches the model narrating this action without
+    actually calling register_new_connection that same turn."""
+    return bool(text and _REGISTER_VERB.search(text) and _NEW_CONNECTION_NOUN.search(text))
+
 # Tools that represent a troubleshooting attempt — each successful call that
 # leaves the issue unresolved bumps the decision engine's failed-attempts count.
 _TROUBLESHOOT_TOOLS = {
@@ -225,6 +250,10 @@ class ConversationManager:
         # human but does not call transfer_to_senior_executive. Forces the
         # transfer on the next turn so the caller never has to ask twice.
         self._force_transfer_next = False
+        # Same backstop pattern for register_new_connection — see
+        # _promised_new_connection's docstring for the production evidence.
+        self._force_new_connection_next = False
+        self._new_connection_directive: str = ""
         # Set to a TransferContext when transfer_to_senior_executive fires — the
         # VoiceSession reads it after the turn's audio drains and performs the
         # actual leg transfer (mirrors end_call_requested).
@@ -428,6 +457,29 @@ class ConversationManager:
         self._last_user_text = user_text
         self._update_caller_emotion(user_text)
 
+        # Honour an unfulfilled new-connection-registration promise from last
+        # turn (see _promised_new_connection). Plain directive string, not an
+        # EscalationDecision — folded into _messages() below.
+        if self._force_new_connection_next:
+            self._new_connection_directive = (
+                "[UNFULFILLED PROMISE] Last turn you told the caller their new "
+                "connection request was being registered/submitted, but "
+                "register_new_connection was never actually called — they were "
+                "promised an application number that does not exist. The "
+                "details you already gathered (name, address, PIN code, "
+                "service type, contact number) are still in CALL MEMORY / this "
+                "conversation. Call register_new_connection with them THIS "
+                "turn and give the caller the real application number. Do not "
+                "ask them to repeat anything they already gave you, and do not "
+                "say you are registering it again without actually calling "
+                "the tool.")
+            log.warning("turn %d: forcing register_new_connection — agent "
+                        "promised it last turn but did not call the tool",
+                        self.turn_no)
+        else:
+            self._new_connection_directive = ""
+        self._force_new_connection_next = False
+
         # DECISION ENGINE: weigh intent/sentiment/severity/failed-attempts/request
         # /tool-response and, when a human is warranted, inject a directive so the
         # LLM reliably calls transfer_to_senior_executive this turn.
@@ -506,20 +558,32 @@ class ConversationManager:
             self.memory.history.append({"role": "assistant", "content": text})
             yield self._voice_fixed(text, lang, StyleName.DEFAULT)
 
+        said_this_turn = " ".join(
+            m.get("content") or "" for m in self.memory.history[hist_start:]
+            if m.get("role") == "assistant")
+
         # ── Transfer-promise backstop: if the agent TOLD the caller it was
         # connecting them to a human but never called transfer_to_senior_executive
         # this turn, arm a forced transfer for the next turn so the caller is not
         # left waiting and does not have to ask again.
         if not self.transfer_requested and getattr(self.s, "transfer_enabled", True):
-            said_this_turn = " ".join(
-                m.get("content") or "" for m in self.memory.history[hist_start:]
-                if m.get("role") == "assistant")
             fired = "transfer_to_senior_executive" in self._tools_used[tools_start:]
             if _promised_transfer(said_this_turn) and not fired:
                 self._force_transfer_next = True
                 log.warning("turn %d: agent promised a transfer but did not call "
                             "the tool — arming forced transfer for next turn",
                             self.turn_no)
+
+        # ── New-connection-promise backstop: same pattern, see
+        # _promised_new_connection's docstring for the production evidence
+        # (session acbfc95ee8dc — promised registration twice, called the
+        # tool zero times).
+        fired_nc = "register_new_connection" in self._tools_used[tools_start:]
+        if _promised_new_connection(said_this_turn) and not fired_nc:
+            self._force_new_connection_next = True
+            log.warning("turn %d: agent promised to register a new connection "
+                        "but did not call the tool — arming forced "
+                        "registration for next turn", self.turn_no)
 
         # ── Number Recognition Engine: arm the buffer if the agent just asked
         # for an account/mobile/OTP number, so a fragmented reply across
@@ -627,7 +691,8 @@ class ConversationManager:
             d for d in (confidence_directive, streak_directive, self.topic.directive(),
                         self._mood_directive(), self._verified_caller_directive(),
                         self._escalation_decision.directive(),
-                        _already_done_directive(self._tools_used)) if d
+                        _already_done_directive(self._tools_used),
+                        self._new_connection_directive) if d
         )
         system = compose_system_prompt(self.lang.directive(), self.memory.render_block(),
                                        knowledge_block, directives, persona=self.persona)

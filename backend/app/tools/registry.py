@@ -171,14 +171,19 @@ def build_schemas() -> list[dict]:
         _fn("register_new_connection",
             "Log a NEW CONNECTION request from a prospective customer and forward it "
             "to the operations team. NO verification and NO OTP — the caller is not an "
-            "existing subscriber. Collect and pass: their FULL name (first and last, not "
-            "just a first name), the full installation address, its 6-digit PIN code "
-            "(captured and confirmed on its own, same as any other number — never guess "
-            "or infer it from the address text), service_type (mobile/prepaid|postpaid|"
-            "fiber|enterprise), the plan they want, a contact_mobile to reach them on "
-            "(10 digits, no country code — strip a spoken +91 yourself if they include "
-            "it), and a preferred_slot (preferred callback/installation time). Call this "
-            "once you have these details.",
+            "existing subscriber. REQUIRED (call the moment you have all five — do not "
+            "wait for anything else): their FULL name (first and last, not just a first "
+            "name), the full installation address, its 6-digit PIN code (captured and "
+            "confirmed on its own, same as any other number — never guess or infer it "
+            "from the address text), service_type (mobile/prepaid|postpaid|fiber|"
+            "enterprise), and a contact_mobile to reach them on (10 digits, no country "
+            "code — strip a spoken +91 yourself if they include it). OPTIONAL, never "
+            "block the call on these — ask after registering, not before: plan, and "
+            "preferred_slot (callback/installation time; if not given, just tell the "
+            "caller the installation team will call to confirm timing). Saying you are "
+            "registering the request is NOT the same as calling this tool — if your "
+            "reply tells the caller their request is being submitted, this call MUST be "
+            "in that exact same turn.",
             {"name": S, "address": S, "pincode": S, "service_type": S, "plan": S,
              "contact_mobile": S, "preferred_slot": S},
             ["name", "address", "pincode", "service_type", "contact_mobile"]),
