@@ -703,16 +703,37 @@ class ConversationManager:
     def _verified_caller_directive(self) -> str:
         """Standing directive for a caller recognized from their registered mobile.
         Kills the 'greeted by name but still asked to verify' behaviour: identity
-        is already established by caller ID, so verification must never be asked."""
+        is already established by caller ID, so verification must never be asked.
+
+        Production evidence (session faefdb53dbff): this directive's "never ask
+        for account number or mobile — you already have them" line was being
+        read by the model as license to skip the NEW CONNECTION flow's own
+        collection steps too. A recognized, verified caller asked for a new
+        connection; the agent never asked for their name and never offered/
+        confirmed a contact number (per the CONTACT NUMBER rule in
+        04_tools.md) — it silently pulled "Rounit Singh" and the caller-ID
+        mobile out of CALL MEMORY and registered on the spot. That is wrong:
+        a new connection is a separate request, not an account lookup, so it
+        must still get its own explicit name/contact confirmation even when
+        the caller is already verified. The carve-out below exists to stop
+        that bleed-through.
+        """
         if not (self._caller_recognized and self.memory.verified):
             return ""
         return (
             "[CALLER ALREADY VERIFIED] This caller is phoning from their own "
             "registered mobile, so their identity is CONFIRMED and their name, "
             "account number and mobile are in CALL MEMORY. Do NOT ask them to "
-            "verify, and never ask for their account number or mobile — you "
-            "already have them. Go straight to solving their problem. (An OTP is "
-            "still required only for a plan change or a SIM swap.)"
+            "verify, and never ask for their account number or mobile FOR AN "
+            "EXISTING-ACCOUNT LOOKUP OR ISSUE — you already have them. Go "
+            "straight to solving their problem. (An OTP is still required only "
+            "for a plan change or a SIM swap.) EXCEPTION — NEW CONNECTION: a "
+            "new connection is a SEPARATE request, not an account lookup. This "
+            "verification shortcut does NOT apply to it — you must still ask "
+            "for the caller's full name out loud, and still OFFER/confirm the "
+            "contact number per the CONTACT NUMBER rule, even for this same "
+            "verified caller. Never silently fill the new connection's name or "
+            "contact_mobile from CALL MEMORY without saying them to the caller."
         )
 
     def _messages(self, knowledge_block: str = "") -> list[dict]:
