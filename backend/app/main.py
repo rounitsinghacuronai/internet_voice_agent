@@ -115,9 +115,15 @@ async def lifespan(app: FastAPI):
         from .speech.plan import StyleName
 
         persona = get_persona(settings)
-        fixed_lines = [(persona.greeting, "mr", StyleName.GREETING),
-                       (persona.silence_nudge["mr"], "mr", StyleName.DEFAULT),
-                       (persona.apology["mr"], "mr", StyleName.DEFAULT)]
+        # Greeting is pre-warmed in all three languages now: a recognized,
+        # verified returning caller with a stored hi/en preference is greeted
+        # in that language (see ConversationManager.greeting), not just
+        # Marathi, so a cold Sarvam round-trip is still possible on THEIR
+        # first turn of the call if only "mr" were warmed here.
+        fixed_lines = [(text, lang, StyleName.GREETING)
+                       for lang, text in persona.greeting.items()]
+        fixed_lines += [(persona.silence_nudge["mr"], "mr", StyleName.DEFAULT),
+                        (persona.apology["mr"], "mr", StyleName.DEFAULT)]
         if settings.speech_enabled:
             director = SpeechDirector(settings)
             to_warm = [(p.text, p.language, p.pace) for p in

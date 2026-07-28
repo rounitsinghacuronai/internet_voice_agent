@@ -138,3 +138,34 @@ def test_persist_never_raises_on_storage_failure(manager):
     manager.memory.language = "hi"
     manager.tools.svc.set_preferred_language = MagicMock(side_effect=RuntimeError("db down"))
     manager.persist_language_preference()   # must not raise
+
+
+# ── the opening greeting itself follows the seeded preference ───────────────
+#
+# Production evidence (session 929a148d33af): a recognized, verified caller
+# with an established Hindi preference (from earlier calls) was greeted in
+# Marathi anyway — "it used marathi in starting without any reason". Root
+# cause: recognize_caller() seeded self.lang.language correctly, but
+# greeting() never looked at it — persona.greeting was a single hardcoded
+# Marathi string with nothing else to choose from. Fixed by making
+# persona.greeting/greeting_personal per-language tables and having
+# greeting() pick the seeded language, falling back to Marathi exactly as
+# before for anyone recognize_caller() didn't seed.
+
+def test_greeting_uses_the_seeded_preference_for_a_recognized_caller(manager):
+    manager.tools.svc.set_preferred_language("300012345678", "hi")
+    first_name = manager.recognize_caller("9820012345")   # Ramesh Patil's mobile
+    chunk = manager.greeting(first_name)
+    assert chunk.language == "hi"
+    assert "कर सकता हूँ" in chunk.text or "कर सकती हूँ" in chunk.text
+
+
+def test_greeting_still_defaults_to_marathi_with_no_stored_preference(manager):
+    first_name = manager.recognize_caller("9820012345")
+    chunk = manager.greeting(first_name)
+    assert chunk.language == "mr"
+
+
+def test_greeting_defaults_to_marathi_for_a_totally_unrecognized_caller(manager):
+    chunk = manager.greeting()
+    assert chunk.language == "mr"

@@ -34,8 +34,21 @@ MAL = get_persona(_settings("Rahul", "male"))
 
 # ── configuration-driven identity ────────────────────────────────────────────
 def test_greeting_uses_configured_name_and_gender():
-    assert "Priya" in FEM.greeting and FEM.greeting.rstrip("?").endswith("करू शकते")
-    assert "Rahul" in MAL.greeting and MAL.greeting.rstrip("?").endswith("करू शकतो")
+    assert "Priya" in FEM.greeting["mr"] and FEM.greeting["mr"].rstrip("?").endswith("करू शकते")
+    assert "Rahul" in MAL.greeting["mr"] and MAL.greeting["mr"].rstrip("?").endswith("करू शकतो")
+
+
+def test_greeting_available_in_hindi_and_english_too():
+    """Recognized returning callers with a stored hi/en preference are
+    greeted in that language (see ConversationManager.greeting) — the table
+    must actually have those entries, gendered correctly, not just Marathi."""
+    assert "Priya" in FEM.greeting["hi"] and "कर सकती हूँ" in FEM.greeting["hi"]
+    assert "Rahul" in MAL.greeting["hi"] and "कर सकता हूँ" in MAL.greeting["hi"]
+    assert "Priya" in FEM.greeting["en"]
+    assert "Rahul" in MAL.greeting["en"]
+    for lang in ("mr", "hi", "en"):
+        assert lang in FEM.greeting_personal and "{first}" in FEM.greeting_personal[lang]
+        assert lang in MAL.greeting_personal and "{first}" in MAL.greeting_personal[lang]
 
 
 def test_silence_nudge_gendered_all_languages():
@@ -70,7 +83,7 @@ def test_rendered_prompt_contains_only_configured_identity():
         assert other not in prompt
         assert "रतन" not in prompt and "Ratan" not in prompt
         assert "{{" not in prompt          # every placeholder rendered
-        assert persona.greeting in prompt  # greeting quote follows the persona
+        assert persona.greeting["mr"] in prompt  # greeting quote follows the persona
 
 
 def test_gender_rules_injected_into_prompt():

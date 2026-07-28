@@ -52,6 +52,39 @@ _HUMAN_REQUEST = re.compile(
     r"insaan|aadmi)",
     re.IGNORECASE)
 
+# Explicit REFUSAL of a transfer/human — the mirror image of _HUMAN_REQUEST.
+#
+# Production evidence (session 929a148d33af): the caller was on a HIGH-priority
+# sentiment escalation path (mood stuck "frustrated" after several barge-in
+# cancellations of its own — a separate bug — kept failed_attempts/mood past
+# rule 5's threshold below). Every turn re-evaluated to should_transfer=True,
+# and each one re-called transfer_to_senior_executive, opening a NEW ticket
+# every time (ESCCC264025, ESC21A4847D, ESC7A75999B, ESCF46B7D6E in one call).
+# The caller said, in Hindi, "मेरे को senior अधिकारी से बात नहीं करनी है" — I do
+# NOT want to talk to a senior official — but that sentence still CONTAINS the
+# words "senior" and "अधिकारी" from _HUMAN_REQUEST's own keyword list, so had
+# it ever reached evaluate() uncancelled it would have matched check 2
+# (_HUMAN_REQUEST) and been read as a POSITIVE request for a human — the exact
+# opposite of what was said. Neither _HUMAN_REQUEST nor rule 5 (sentiment) has
+# any way to notice a negation modifying those same keywords. This pattern
+# looks for a negation word within a short window of a transfer/human keyword,
+# in either word order (Hindi negation typically follows the object; English
+# precedes it), and evaluate() checks it BEFORE any positive-match rule so an
+# explicit refusal always wins.
+_TRANSFER_REFUSAL = re.compile(
+    r"(senior|human|agent|executive|representative|supervisor|manager|transfer|"
+    r"सीनियर|सिनियर|एग्ज़िक्यूटिव|एग्जीक्यूटिव|एग्ज़ेक्यूटिव|एक्ज़िक्यूटिव|"
+    r"एजेंट|एजंट|ऑफिसर|ऑफ़िसर|अफसर|मैनेजर|मॅनेजर|सुपरवाइजर|सुपरवाइज़र|"
+    r"माणस|माणूस|व्यक्ती|अधिकारी|प्रतिनिधी|वरिष्ठ|आदमी|इंसान|व्यक्ति|प्रतिनिधि|"
+    r"कनेक्ट|ट्रांसफर)"
+    r".{0,30}(नहीं|मत|not\b|don'?t\b|do not\b|no need|nahi\b|nako\b)"
+    r"|"
+    r"(नहीं|मत|don'?t\b|do not\b|nahi\b|nako\b)"
+    r".{0,25}(senior|human|agent|executive|transfer|"
+    r"सीनियर|सिनियर|एग्ज़िक्यूटिव|एग्जीक्यूटिव|अधिकारी|माणस|माणूस|आदमी|इंसान|"
+    r"कनेक्ट|ट्रांसफर)",
+    re.IGNORECASE)
+
 # Category rules: (compiled keyword pattern) -> (reason, category, priority).
 # Ordered — first match wins, so the most severe/specific sit at the top.
 _CATEGORY_RULES: list[tuple[re.Pattern, tuple[str, str, str]]] = [
@@ -136,6 +169,17 @@ class EscalationEngine:
                 return EscalationDecision(
                     True, "backend_manual_intervention",
                     "Manual Intervention Required", HIGH, "tool")
+
+        # 1b) Explicit REFUSAL of a transfer — checked before every text-based
+        # rule below (including _HUMAN_REQUEST, which shares the same keyword
+        # list and would otherwise read "I don't want a senior" as a request
+        # FOR one). Overrides the sentiment rule too, so a caller who is both
+        # frustrated AND has just said no to a transfer isn't escalated anyway
+        # on the very next turn. Does NOT override a backend tool's own
+        # handoff signal (check 1) — that's an objective system state, not a
+        # reading of the caller's words.
+        if _TRANSFER_REFUSAL.search(text):
+            return EscalationDecision(False)
 
         # 2) Explicit human request — always honoured.
         if _HUMAN_REQUEST.search(text):

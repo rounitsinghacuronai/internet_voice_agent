@@ -50,7 +50,8 @@ from ..config import Settings
 from ..persona import get_persona
 from ..prompts.loader import compose_system_prompt
 from .escalation import (EscalationDecision, EscalationEngine,
-                         build_escalation_summary, _HUMAN_REQUEST, _TOOL_LABEL)
+                         build_escalation_summary, _HUMAN_REQUEST,
+                         _TRANSFER_REFUSAL, _TOOL_LABEL)
 from ..telephony.transfer_service import TransferContext
 from ..providers.base import LLMProvider, ProviderError
 from ..speech.director import detect_caller_emotion
@@ -406,10 +407,18 @@ class ConversationManager:
             log.warning("failed to persist language preference: %s", e)
 
     def greeting(self, caller_first_name: str | None = None) -> TurnChunk:
-        text = (self.persona.personal_greeting(caller_first_name)
-                if caller_first_name else self.persona.greeting)
+        """Opening line. Marathi is the house default for a caller whose
+        language isn't known yet (per 03_language.md's "opening line is
+        fixed" design). recognize_caller() seeds self.lang.language from a
+        stored preference BEFORE this is called for a recognized, verified
+        returning caller — greet them in that language instead, rather than
+        always defaulting to Marathi regardless of what we already know about
+        them (production evidence: session 929a148d33af)."""
+        lang = _lang_for(self.lang.language, self.persona.greeting)
+        text = (self.persona.personal_greeting(caller_first_name, lang)
+                if caller_first_name else self.persona.greeting.get(lang, ""))
         self.memory.history.append({"role": "assistant", "content": text})
-        return self._voice_fixed(text, "mr", StyleName.GREETING)
+        return self._voice_fixed(text, lang, StyleName.GREETING)
 
     def silence_nudge(self) -> TurnChunk:
         """Gentle re-prompt spoken when the caller has gone silent — context-aware
@@ -519,13 +528,22 @@ class ConversationManager:
                 user_text, self.memory, mood=self._caller_emotion,
                 failed_attempts=self._failed_attempts,
                 last_tool_results=self._last_tool_results)
-            # Honour a promise the model made last turn but never executed.
-            if self._force_transfer_next and not self._escalation_decision.should_transfer:
+            # Honour a promise the model made last turn but never executed —
+            # UNLESS the caller used THIS turn to explicitly say they don't
+            # want the transfer. Without this guard, a caller who declines
+            # right after the agent promised a transfer (but hadn't yet
+            # called the tool) would still get force-transferred by the
+            # promise-backstop, defeating the whole point of asking them.
+            if (self._force_transfer_next and not self._escalation_decision.should_transfer
+                    and not _TRANSFER_REFUSAL.search(user_text or "")):
                 self._escalation_decision = EscalationDecision(
                     True, "agent_promised_transfer", "Customer Requested Human",
                     "HIGH", "promise_guard")
                 log.info("turn %d: forcing transfer — agent promised it last turn "
                          "but did not call the tool", self.turn_no)
+            elif self._force_transfer_next:
+                log.info("turn %d: caller declined the promised transfer — "
+                          "not forcing it", self.turn_no)
             self._force_transfer_next = False
             if self._escalation_decision.should_transfer:
                 log.info("turn %d: escalation recommended — %s (%s, %s)",

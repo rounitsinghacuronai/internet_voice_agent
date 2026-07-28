@@ -184,6 +184,25 @@ class VoiceSession:
         self._producer_task: Optional[asyncio.Task] = None
         self._speak_task: Optional[asyncio.Task] = None
 
+        # The task actually HOLDING _turn_lock right now (set on entry to
+        # _run_turn's locked section, cleared on exit). Production evidence
+        # (session 929a148d33af): a long-running turn — specifically a senior-
+        # executive transfer handoff, which speaks a "connecting you" line,
+        # drains its playback, then calls the real Exotel transfer API, all
+        # inside the locked section — can still be running when the CALLER
+        # speaks again. That next utterance completes its own audio pipeline
+        # (unlocked) and gets assigned to _active_turn_task by _on_utterance
+        # BEFORE it ever reaches _turn_lock.acquire(), which then just blocks
+        # it behind the still-running transfer. A subsequent barge-in cancels
+        # whatever _active_turn_task currently points to — the NEW, blocked
+        # task — while the ACTUAL transfer keeps running completely untouched
+        # and unstoppable, even though the caller had just said (twice) that
+        # they did not want to be transferred. _locked_task is the fix: it
+        # always points at whichever task is genuinely inside the locked
+        # section, so barge-in can reach and cancel the real work in flight,
+        # not just whatever got queued up behind it.
+        self._locked_task: Optional[asyncio.Task] = None
+
         # Guards ConversationManager (not re-entrant)
         self._turn_lock = asyncio.Lock()
 
@@ -565,6 +584,23 @@ class VoiceSession:
         if self._active_turn_task and not self._active_turn_task.done():
             self._active_turn_task.cancel()
 
+        # Also cancel whichever task is genuinely holding _turn_lock right now.
+        # Production evidence (session 929a148d33af): once a turn reaches a
+        # long-running locked section — a senior-executive transfer handoff is
+        # the real case that happened — a LATER utterance's task can complete
+        # its (unlocked) audio pipeline and get assigned to _active_turn_task
+        # before it ever reaches the lock, at which point it just blocks
+        # behind the still-running transfer. Cancelling _active_turn_task then
+        # only cancels that blocked newcomer; the actual transfer keeps
+        # running untouched and eventually completes regardless of what the
+        # caller says in the meantime — in that call the caller said twice
+        # they did not want to be transferred, and it happened anyway. This
+        # reaches the real work in flight, not just whatever queued up
+        # behind it. Usually _locked_task IS _active_turn_task, so this is a
+        # no-op double-cancel in the common case.
+        if self._locked_task and not self._locked_task.done():
+            self._locked_task.cancel()
+
         # Belt-and-suspenders: also cancel subtasks in case the task reference
         # is stale (e.g., barge-in fires while still in STT phase, before
         # _run_turn has been entered and subtasks registered)
@@ -928,6 +964,30 @@ class VoiceSession:
             so in-flight backend writes complete in the background.
         """
         async with self._turn_lock:
+            # See _locked_task's definition in __init__: this is the ONLY task
+            # genuinely doing work right now. _active_turn_task may already
+            # point at a newer, still-blocked-on-this-lock task by the time we
+            # get here — barge-in needs a way to reach THIS task regardless.
+            self._locked_task = asyncio.current_task()
+            try:
+                await self._run_turn_locked(
+                    text, stt_lang, peak_prob, language_confidence
+                )
+            finally:
+                if self._locked_task is asyncio.current_task():
+                    self._locked_task = None
+
+    async def _run_turn_locked(
+        self,
+        text: str,
+        stt_lang: str,
+        peak_prob: float = 1.0,
+        language_confidence: float | None = None,
+    ) -> None:
+        """Body of _run_turn that actually runs under _turn_lock. Split out so
+        _run_turn can bracket it with _locked_task bookkeeping without an extra
+        indent level."""
+        if True:
             queue: asyncio.Queue[TurnChunk | None] = asyncio.Queue()
             producer = speak_task = None
 

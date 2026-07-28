@@ -95,10 +95,17 @@ class PersonaContext:
     gender: str                       # "male" | "female"
     role: str
     voice: str                        # default TTS speaker for this gender
-    greeting: str = ""
+    # Opening line, keyed by language ("mr"/"hi"/"en"). Marathi is the house
+    # default spoken to a caller whose language is not yet known. A recognized,
+    # verified returning caller with a stored language preference (see
+    # ConversationManager.recognize_caller / persist_language_preference) is
+    # greeted in THAT language instead — see greeting()/personal_greeting()
+    # below and _lang_for()'s "mr" fallback in manager.py.
+    greeting: dict = field(default_factory=dict)
     # Personalized opener for a recognized caller (call from a registered mobile).
-    # Contains a literal "{first}" placeholder filled with the caller's first name.
-    greeting_personal: str = ""
+    # Contains a literal "{first}" placeholder filled with the caller's first
+    # name. Also keyed by language, same fallback rule as `greeting`.
+    greeting_personal: dict = field(default_factory=dict)
     apology: dict = field(default_factory=dict)
     silence_nudge: dict = field(default_factory=dict)
     silence_nudge_midcall: dict = field(default_factory=dict)
@@ -115,13 +122,17 @@ class PersonaContext:
     number_capture_ack: dict = field(default_factory=dict)
 
     # ── recognized-caller opener ─────────────────────────────────────────────
-    def personal_greeting(self, first_name: str) -> str:
-        """Opener when the caller is recognized from a registered mobile. Falls
-        back to the standard greeting if no name or template is available."""
+    def personal_greeting(self, first_name: str, lang: str = "mr") -> str:
+        """Opener when the caller is recognized from a registered mobile, in
+        `lang` (their stored preference — "mr" for a caller with none, the
+        same house default used for anyone not yet recognized). Falls back to
+        the standard greeting if no name or template is available for that
+        language."""
         first = (first_name or "").strip()
-        if not first or not self.greeting_personal:
-            return self.greeting
-        return self.greeting_personal.replace("{first}", first)
+        key = lang if lang in self.greeting_personal else "mr"
+        if not first or key not in self.greeting_personal:
+            return self.greeting.get(lang if lang in self.greeting else "mr", "")
+        return self.greeting_personal[key].replace("{first}", first)
 
     # ── prompt integration ───────────────────────────────────────────────────
     def identity_line(self) -> str:
@@ -174,11 +185,15 @@ class PersonaContext:
         return out
 
     def render(self, template: str) -> str:
-        """Fill persona placeholders in a prompt template."""
+        """Fill persona placeholders in a prompt template. {{GREETING}} is
+        illustrative only (the LLM also sees the REAL spoken greeting for
+        this call in conversation history) — the Marathi house-default text
+        anchors that example regardless of which language this particular
+        call's opener actually used."""
         return (template
                 .replace("{{AGENT_NAME}}", self.name)
                 .replace("{{AGENT_ROLE}}", self.role)
-                .replace("{{GREETING}}", self.greeting)
+                .replace("{{GREETING}}", self.greeting.get("mr", ""))
                 .replace("{{GENDER_GRAMMAR}}", self.gender_grammar_rules()))
 
 
@@ -194,13 +209,37 @@ def _build(name: str, gender: str, role: str, voice: str) -> PersonaContext:
     hi_block = "करती हूँ" if f else "करता हूँ"
     hi_taking = "ले रही हूँ" if f else "ले रहा हूँ"
     hi_connect = "जोड़ रही हूँ" if f else "जोड़ रहा हूँ"
+    hi_speaking = "बोल रही हूँ" if f else "बोल रहा हूँ"
 
     return PersonaContext(
         name=name, gender=gender, role=role, voice=voice,
-        greeting=("सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. "
-                  f"मी {name}, आपली कशा प्रकारे मदत {mr_can}?"),
-        greeting_personal=(f"नमस्कार {{first}}! सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. "
-                           f"मी {name} {mr_speaking}, आपली कशा प्रकारे मदत {mr_can}?"),
+        # Marathi is the house default — spoken to any caller whose language
+        # isn't known yet (new/unrecognized number), per 03_language.md's
+        # documented "opening line is fixed" design. A recognized, verified
+        # returning caller with a stored language preference (see
+        # ConversationManager.recognize_caller) is greeted in hi/en instead —
+        # see greeting()/personal_greeting() in manager.py. Production
+        # evidence for why this needed a real per-language table, not just a
+        # Marathi string: session 929a148d33af — a caller who had already
+        # established Hindi as his preference in earlier calls was greeted in
+        # Marathi anyway on a later call, read as "it used Marathi for no
+        # reason" — because greeting() had nothing else to choose from.
+        greeting={
+            "mr": ("सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. "
+                   f"मी {name}, आपली कशा प्रकारे मदत {mr_can}?"),
+            "hi": ("सिंकब्रॉड नेटवर्क्स ग्राहक सेवा में आपका स्वागत है। "
+                   f"मैं {name}, आपकी कैसे मदद {hi_can}?"),
+            "en": (f"Welcome to Syncbroad Networks customer service. This is "
+                   f"{name}, how may I help you?"),
+        },
+        greeting_personal={
+            "mr": (f"नमस्कार {{first}}! सिंकब्रॉड नेटवर्क्स ग्राहक सेवेत आपले स्वागत आहे. "
+                   f"मी {name} {mr_speaking}, आपली कशा प्रकारे मदत {mr_can}?"),
+            "hi": (f"नमस्ते {{first}}! सिंकब्रॉड नेटवर्क्स ग्राहक सेवा में आपका स्वागत है। "
+                   f"मैं {name} {hi_speaking}, आपकी कैसे मदद {hi_can}?"),
+            "en": (f"Hello {{first}}! Welcome to Syncbroad Networks customer "
+                   f"service. This is {name} speaking, how may I help you?"),
+        },
         apology={
             "mr": "माफ करा, थोडी तांत्रिक अडचण आली. कृपया पुन्हा सांगाल का?",
             "hi": "माफ़ कीजिए, थोड़ी तकनीकी दिक्कत आ गई. कृपया दोबारा बताइए?",
