@@ -43,6 +43,7 @@ import logging
 import re
 import time
 
+import numpy as np
 from fastapi import APIRouter, WebSocket
 
 from ..api.ws_voice import VoiceSession
@@ -101,6 +102,31 @@ _MAX_SEND = 32000     # raw bytes; ~43 kB after base64, well under the 100 kB ca
 _LEAD_S = 2.0
 # Per-message audio duration. Small messages also make `clear` act instantly.
 _CHUNK_S = 0.4
+
+# Length of the anti-click fade applied to a severed audio tail. Long enough to
+# remove the step discontinuity, short enough that no one can hear the level
+# move — a barge-in still stops the agent essentially instantly.
+_FADE_MS = 6.0
+
+
+def _fade_out_tail(buf: bytearray, rate: int, fade_ms: float = _FADE_MS) -> None:
+    """Ramp the final few ms of a PCM16 buffer down to zero, in place.
+
+    Speech severed at full amplitude and followed by silence is a step, and a
+    step is broadband click energy. Any place we stop sending mid-utterance —
+    end of sentence, barge-in, hang-up — needs the tail taken to zero smoothly
+    instead. Linear is fine here: over 6 ms the ear integrates it as part of
+    the natural offset, and it costs one multiply per sample on ~100 samples.
+    """
+    if not buf or len(buf) % 2:
+        return
+    n_fade = min(len(buf) // 2, max(1, int(rate * fade_ms / 1000.0)))
+    if n_fade < 2:
+        return
+    a = np.frombuffer(bytes(buf), dtype="<i2").astype(np.float32)
+    ramp = np.linspace(1.0, 0.0, n_fade, dtype=np.float32)
+    a[-n_fade:] *= ramp
+    buf[:] = np.clip(np.rint(a), -32768, 32767).astype("<i2").tobytes()
 
 
 class ExotelTransport:
@@ -390,9 +416,24 @@ class ExotelTransport:
             del buf[:per_msg]
             await self._send_media(chunk)
         if force and buf:
-            n = len(buf)
+            # END-OF-SENTENCE CLICK. This branch runs on every `audio_end`,
+            # i.e. at the end of EVERY sentence (~50 times in a 4-minute call),
+            # and used to append hard zeros directly after the last speech
+            # sample. When that sample is non-zero — which it almost always is,
+            # because a sentence tail is mid-decay and a barge-in severs it at
+            # full amplitude — the jump to 0 is a step discontinuity, and a step
+            # is a click. Confirmed in a captured call: abrupt cuts at 42.1 s,
+            # 159.6 s and 217.8 s, matching the caller's report of cracking
+            # "at last and in mid also".
+            #
+            # Ramp the tail down instead. A few ms of fade is inaudible as a
+            # level change but removes the discontinuity entirely, so the pad
+            # that follows is a continuation of silence rather than a cliff.
+            tail = bytearray(buf)
+            _fade_out_tail(tail, self.leg_rate)
+            n = len(tail)
             pad = (-n) % _MULTIPLE           # zero-pad up to a 320-byte boundary
-            chunk = bytes(buf) + b"\x00" * pad
+            chunk = bytes(tail) + b"\x00" * pad
             buf.clear()
             await self._send_media(chunk)
 
@@ -441,7 +482,23 @@ class ExotelTransport:
             self._closed = True
 
     async def _send_clear(self) -> None:
-        """Barge-in: drop our buffered tail AND tell Exotel to stop playing."""
+        """Barge-in: fade what we still hold, then tell Exotel to stop playing.
+
+        The buffered tail is about to be discarded, and whatever Exotel has
+        already queued is about to be dropped mid-sample by `clear`. Emitting a
+        short faded tail FIRST gives the caller a smooth offset instead of a
+        waveform severed at full amplitude, which is a click. It costs ~6 ms —
+        the interruption still reads as instant — and it only runs when there
+        is actually something buffered to fade.
+        """
+        if self._out_buf and not self._closed and self.stream_sid is not None:
+            tail = bytearray(self._out_buf[-_MULTIPLE * 4:])
+            _fade_out_tail(tail, self.leg_rate)
+            pad = (-len(tail)) % _MULTIPLE
+            try:
+                await self._send_media(bytes(tail) + b"\x00" * pad)
+            except Exception:                       # noqa: BLE001
+                pass                                # never block the barge-in
         self._out_buf.clear()
         self._pace_t0 = None                 # reset pacing for the next reply
         self._sent_s = 0.0
