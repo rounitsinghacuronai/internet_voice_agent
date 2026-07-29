@@ -27,3 +27,6 @@ backend/admin_settings.json
 
 # Auto-generated JWT signing secret
 backend/.jwt_secret
+
+# local diagnostic audio captures (never commit — large binaries)
+audiocap/

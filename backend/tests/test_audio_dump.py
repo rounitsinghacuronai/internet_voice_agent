@@ -79,6 +79,29 @@ def test_unwritable_directory_degrades_quietly(tmp_path):
     d.close()             # no exception
 
 
+def test_file_is_playable_mid_capture_without_closing(tmp_path):
+    """The failure that wasted a whole capture cycle: the first version only
+    fixed the RIFF/data lengths in close(), so a file copied off the server
+    while the call was still running declared 0 frames and no media player
+    would open it. The header must be re-patched as we go."""
+    d = open_dump(str(tmp_path), "live.wav", 16000)
+    # more than one patch interval, and NOT a multiple of it, so the tail
+    # after the last patch is non-empty (the realistic mid-call case)
+    chunk = b"\x11\x22" * 8000                     # 16 000 bytes
+    for _ in range(5):
+        d.write(chunk)
+
+    # read it WITHOUT closing, exactly as scp would
+    with wave.open(str(tmp_path / "live.wav"), "rb") as w:
+        assert w.getframerate() == 16000
+        frames = w.getnframes()
+    assert frames > 0, "mid-capture file declares 0 frames — players reject it"
+
+    d.close()
+    with wave.open(str(tmp_path / "live.wav"), "rb") as w:
+        assert w.getnframes() == 5 * len(chunk) // 2   # close() still exact
+
+
 def test_empty_writes_are_harmless(tmp_path):
     d = open_dump(str(tmp_path), "empty.wav", 16000)
     d.write(b"")

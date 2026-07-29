@@ -61,10 +61,19 @@ class WavDump:
     if the process dies mid-call (most players will still decode it, and
     close() fixes the sizes on a clean hang-up)."""
 
+    # Re-patch the header roughly this often so a file copied MID-CALL is still
+    # playable. The original version only fixed the length in close(), which
+    # meant any capture pulled off the box before the caller hung up declared
+    # "0 frames" and every media player refused to open it — exactly what
+    # happened on the first real capture. ~1 s of audio between patches is
+    # negligible I/O and bounds the unplayable tail to the last second.
+    _PATCH_EVERY_BYTES = 32000 * 2
+
     def __init__(self, path: Path, rate: int) -> None:
         self.path = path
         self.rate = rate
         self._n = 0
+        self._since_patch = 0
         self._fh = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,9 +89,23 @@ class WavDump:
         try:
             self._fh.write(pcm)
             self._n += len(pcm)
+            self._since_patch += len(pcm)
+            if self._since_patch >= self._PATCH_EVERY_BYTES:
+                self._since_patch = 0
+                self._patch_header()
         except Exception as e:                       # noqa: BLE001
             log.warning("audio dump: write failed (%s) — capture disabled", e)
             self.close()
+
+    def _patch_header(self) -> None:
+        """Rewrite the RIFF/data lengths in place, then seek back to append."""
+        if self._fh is None:
+            return
+        pos = self._fh.tell()
+        self._fh.seek(0)
+        self._fh.write(_header(self.rate, self._n))
+        self._fh.flush()
+        self._fh.seek(pos)
 
     def close(self) -> None:
         fh, self._fh = self._fh, None
