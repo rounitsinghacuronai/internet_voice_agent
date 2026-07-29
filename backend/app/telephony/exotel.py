@@ -43,13 +43,11 @@ import logging
 import re
 import time
 
-import numpy as np
 from fastapi import APIRouter, WebSocket
 
 from ..api.ws_voice import VoiceSession
 from ..config import Settings
-from .audio_dump import WavDump, open_dump
-from .resample import StreamResampler
+from .resample import resample_pcm16
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -91,42 +89,9 @@ _MAX_SEND = 32000     # raw bytes; ~43 kB after base64, well under the 100 kB ca
 # more than _LEAD_S seconds ahead of real-time playback: enough headroom that
 # the caller never hears a gap, small enough that Exotel is never flooded —
 # and barge-in `clear` only ever has ≲1 s of buffered audio to discard.
-# 2.0 s (was 1.0 s): with only 1 s of headroom, any synthesis stall longer than a
-# second — a slow REST round-trip, or the gap while the NEXT sentence of a
-# multi-sentence turn is still synthesizing — drained the phone-leg buffer to
-# empty. That underflow is a click/crackle + gap, and it lands right when a
-# differently-paced sentence begins: exactly the "voice cracking in between when
-# the speed flutters" report. 2 s of lead rides through those stalls; still far
-# under Exotel's limits and still 320-byte-chunked, so barge-in `clear` stays
-# effectively instant (it only ever discards ≤_LEAD_S of buffered audio).
-_LEAD_S = 2.0
+_LEAD_S = 1.0
 # Per-message audio duration. Small messages also make `clear` act instantly.
 _CHUNK_S = 0.4
-
-# Length of the anti-click fade applied to a severed audio tail. Long enough to
-# remove the step discontinuity, short enough that no one can hear the level
-# move — a barge-in still stops the agent essentially instantly.
-_FADE_MS = 6.0
-
-
-def _fade_out_tail(buf: bytearray, rate: int, fade_ms: float = _FADE_MS) -> None:
-    """Ramp the final few ms of a PCM16 buffer down to zero, in place.
-
-    Speech severed at full amplitude and followed by silence is a step, and a
-    step is broadband click energy. Any place we stop sending mid-utterance —
-    end of sentence, barge-in, hang-up — needs the tail taken to zero smoothly
-    instead. Linear is fine here: over 6 ms the ear integrates it as part of
-    the natural offset, and it costs one multiply per sample on ~100 samples.
-    """
-    if not buf or len(buf) % 2:
-        return
-    n_fade = min(len(buf) // 2, max(1, int(rate * fade_ms / 1000.0)))
-    if n_fade < 2:
-        return
-    a = np.frombuffer(bytes(buf), dtype="<i2").astype(np.float32)
-    ramp = np.linspace(1.0, 0.0, n_fade, dtype=np.float32)
-    a[-n_fade:] *= ramp
-    buf[:] = np.clip(np.rint(a), -32768, 32767).astype("<i2").tobytes()
 
 
 class ExotelTransport:
@@ -176,20 +141,6 @@ class ExotelTransport:
         # diagnostics: counts of every inbound event type, logged at stop —
         # tells us definitively whether Exotel ever streamed caller audio.
         self._rx_events: dict[str, int] = {}
-
-        # Stateful streaming resamplers (see resample.StreamResampler) — one
-        # per direction, carrying interpolation continuity across chunks so
-        # consecutive media frames don't click at their boundary. Built
-        # lazily on first use because leg_rate can still change when the
-        # `start` message arrives (self._on_start below) after __init__.
-        self._out_resampler: StreamResampler | None = None   # tts_rate -> leg_rate
-        self._in_resampler: StreamResampler | None = None    # leg_rate -> input_sample_rate
-
-        # Diagnostic WAV capture of the outbound path (see audio_dump.py).
-        # Opened in _on_start, once leg_rate is known for real. Both stay None
-        # unless DEBUG_AUDIO_DUMP_DIR is set.
-        self._dump_tts: WavDump | None = None    # 24 kHz, before the resample
-        self._dump_leg: WavDump | None = None    # leg_rate, exactly what we send
 
     # ── VoiceSession-facing interface ──────────────────────────────────────────
 
@@ -244,31 +195,6 @@ class ExotelTransport:
             self.stream_sid, self.call_sid, self.from_number, self.to_number,
             self.leg_rate, self.custom_parameters,
         )
-        # A leg rate that Exotel did NOT declare is a guess from .env, and a
-        # wrong guess distorts every sample we send (playback at the wrong
-        # speed/pitch, heard as robotic or "cracking"). That is invisible in
-        # the logs today, so say it plainly and at WARNING when unconfirmed.
-        if not rate:
-            log.warning(
-                "exotel start: media_format carried NO sample_rate — falling back "
-                "to EXOTEL_SAMPLE_RATE=%dHz. If the Voicebot applet URL's "
-                "?sample-rate= differs from this, every outbound sample is "
-                "resampled to the wrong rate and the caller hears distortion.",
-                self.leg_rate,
-            )
-        elif rate != self.s.exotel_sample_rate:
-            log.warning(
-                "exotel start: leg negotiated %dHz but EXOTEL_SAMPLE_RATE=%dHz — "
-                "using the negotiated %dHz. Update .env to match.",
-                rate, self.s.exotel_sample_rate, rate,
-            )
-        dump_dir = getattr(self.s, "debug_audio_dump_dir", "")
-        if dump_dir:
-            sid = (self.stream_sid or "nostream")[:16]
-            self._dump_tts = open_dump(dump_dir, f"tts_{sid}.wav", self._tts_rate)
-            self._dump_leg = open_dump(dump_dir, f"leg_{sid}.wav", self.leg_rate)
-            log.warning("exotel: DEBUG audio capture ON -> %s (unset "
-                        "DEBUG_AUDIO_DUMP_DIR when done)", dump_dir)
 
     async def receive(self) -> dict:
         """Return a Starlette-shaped message dict VoiceSession understands.
@@ -302,11 +228,8 @@ class ExotelTransport:
                 if pcm is None:
                     continue
                 # Upsample the phone leg to our 16 kHz STT/VAD rate (passthrough
-                # when the leg is already 16 kHz). Stateful — see StreamResampler
-                # — so consecutive inbound media frames don't click at the seam.
-                if self._in_resampler is None:
-                    self._in_resampler = StreamResampler(self.leg_rate, self.s.input_sample_rate)
-                pcm16 = self._in_resampler.process(pcm)
+                # when the leg is already 16 kHz).
+                pcm16 = resample_pcm16(pcm, self.leg_rate, self.s.input_sample_rate)
                 return {"type": "websocket.receive", "bytes": pcm16}
             elif event == "stop":
                 log.info("exotel stop: reason=%r | rx events=%s | tx media msgs=%d",
@@ -315,27 +238,21 @@ class ExotelTransport:
                 self._closed = True
                 return {"type": "websocket.disconnect"}
             elif event == "dtmf":
-                # Surface keypad presses to the VoiceSession (DUAL-INPUT capture).
-                # Exotel sends one event per key; digit may be 0-9, '*' or '#'.
-                # Field name varies by build ("digit" vs "digits"), so accept both
-                # and log the raw object to diagnose delivery on live calls.
+                # KEYPAD (DUAL-INPUT capture). Exotel sends one event per key;
+                # digit may be 0-9, '*' or '#'. The field name varies by build
+                # ("digit" vs "digits"), so accept both and log the raw object
+                # so delivery is diagnosable on a live call.
                 dtmf_obj = data.get("dtmf") or data.get("Dtmf") or {}
                 digit = (dtmf_obj.get("digit") or dtmf_obj.get("digits")
                          or dtmf_obj.get("Digit"))
-                log.info("exotel DTMF event: raw=%s → digit=%r", dtmf_obj, digit)
+                log.info("exotel DTMF event: raw=%s -> digit=%r", dtmf_obj, digit)
                 if digit:
                     return {"type": "dtmf", "digit": str(digit)}
                 continue
             elif event in ("connected", "mark", "clear"):
                 continue
             else:
-                # Surface any UNKNOWN event at INFO (once-per-type is enough) so a
-                # keypad signal arriving under a non-standard event name is visible
-                # in the server log instead of silently dropped.
-                if event not in getattr(self, "_seen_unknown", set()):
-                    self._seen_unknown = getattr(self, "_seen_unknown", set()) | {event}
-                    log.info("exotel: unhandled event %r payload=%s", event,
-                             {k: v for k, v in data.items() if k != "media"})
+                log.debug("exotel: ignoring event %r", event)
                 continue
 
     @staticmethod
@@ -368,35 +285,14 @@ class ExotelTransport:
             await self._flush_out(force=True)
 
     async def send_bytes(self, pcm: bytes) -> None:
-        """TTS PCM (24 kHz) → resample to the leg rate, buffer, emit full chunks.
-
-        Stateful resampling (StreamResampler) — each call here is ONE
-        streaming TTS chunk, not the whole sentence, so resampling each
-        independently (as the old stateless resample_pcm16 did) put a small
-        phase discontinuity at every chunk boundary — audible as clicking/
-        crackling over the course of a sentence."""
+        """TTS PCM (24 kHz) → resample to the leg rate, buffer, emit full chunks."""
         if self._closed or self.stream_sid is None:
             return
-        if self._out_resampler is None:
-            self._out_resampler = StreamResampler(self._tts_rate, self.leg_rate)
-        out = self._out_resampler.process(pcm)
-        # DIAGNOSTIC (off unless DEBUG_AUDIO_DUMP_DIR is set) — capture the same
-        # samples on BOTH sides of the resample so the two files can be listened
-        # to and compared. See telephony/audio_dump.py for what each outcome
-        # means. Never allowed to affect the audio path.
-        if self._dump_tts is not None:
-            self._dump_tts.write(pcm)
-        if self._dump_leg is not None:
-            self._dump_leg.write(out)
-        self._out_buf.extend(out)
+        self._out_buf.extend(resample_pcm16(pcm, self._tts_rate, self.leg_rate))
         await self._flush_out(force=False)
 
     async def close(self) -> None:
         self._closed = True
-        for d in (self._dump_tts, self._dump_leg):
-            if d is not None:
-                d.close()
-        self._dump_tts = self._dump_leg = None
         try:
             await self.ws.close()
         except Exception:
@@ -416,24 +312,9 @@ class ExotelTransport:
             del buf[:per_msg]
             await self._send_media(chunk)
         if force and buf:
-            # END-OF-SENTENCE CLICK. This branch runs on every `audio_end`,
-            # i.e. at the end of EVERY sentence (~50 times in a 4-minute call),
-            # and used to append hard zeros directly after the last speech
-            # sample. When that sample is non-zero — which it almost always is,
-            # because a sentence tail is mid-decay and a barge-in severs it at
-            # full amplitude — the jump to 0 is a step discontinuity, and a step
-            # is a click. Confirmed in a captured call: abrupt cuts at 42.1 s,
-            # 159.6 s and 217.8 s, matching the caller's report of cracking
-            # "at last and in mid also".
-            #
-            # Ramp the tail down instead. A few ms of fade is inaudible as a
-            # level change but removes the discontinuity entirely, so the pad
-            # that follows is a continuation of silence rather than a cliff.
-            tail = bytearray(buf)
-            _fade_out_tail(tail, self.leg_rate)
-            n = len(tail)
+            n = len(buf)
             pad = (-n) % _MULTIPLE           # zero-pad up to a 320-byte boundary
-            chunk = bytes(tail) + b"\x00" * pad
+            chunk = bytes(buf) + b"\x00" * pad
             buf.clear()
             await self._send_media(chunk)
 
@@ -482,23 +363,7 @@ class ExotelTransport:
             self._closed = True
 
     async def _send_clear(self) -> None:
-        """Barge-in: fade what we still hold, then tell Exotel to stop playing.
-
-        The buffered tail is about to be discarded, and whatever Exotel has
-        already queued is about to be dropped mid-sample by `clear`. Emitting a
-        short faded tail FIRST gives the caller a smooth offset instead of a
-        waveform severed at full amplitude, which is a click. It costs ~6 ms —
-        the interruption still reads as instant — and it only runs when there
-        is actually something buffered to fade.
-        """
-        if self._out_buf and not self._closed and self.stream_sid is not None:
-            tail = bytearray(self._out_buf[-_MULTIPLE * 4:])
-            _fade_out_tail(tail, self.leg_rate)
-            pad = (-len(tail)) % _MULTIPLE
-            try:
-                await self._send_media(bytes(tail) + b"\x00" * pad)
-            except Exception:                       # noqa: BLE001
-                pass                                # never block the barge-in
+        """Barge-in: drop our buffered tail AND tell Exotel to stop playing."""
         self._out_buf.clear()
         self._pace_t0 = None                 # reset pacing for the next reply
         self._sent_s = 0.0

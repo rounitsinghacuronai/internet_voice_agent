@@ -54,20 +54,7 @@ def _strip_wav_header(data: bytes) -> bytes:
 
 def _parse_wav(data: bytes) -> tuple[bytes, int | None]:
     """Return (pcm, sample_rate|None). Raw PCM passes through with rate None;
-    a RIFF blob has its fmt chunk parsed so the true rate is self-describing.
-
-    STREAMING WAV SIZE FIELDS. A WAV written to a stream cannot know its own
-    length in advance, so the 'data' chunk size is a placeholder — commonly 0,
-    sometimes 0xFFFFFFFF, sometimes the declared total rather than what is in
-    THIS message. Slicing data[pos+8 : pos+8+size] therefore returned b"" when
-    the placeholder was 0, silently discarding the first streamed chunk of the
-    sentence — the one carrying the WAV header, i.e. the audio for the opening
-    ~200 ms. The caller heard the first syllable of the greeting (and of every
-    sentence) clipped off, which reads as a disturbed/glitchy start rather
-    than as missing audio. Treat the size as an upper bound only when it is
-    both non-zero and actually present in this buffer; otherwise take
-    everything after the header.
-    """
+    a RIFF blob has its fmt chunk parsed so the true rate is self-describing."""
     if data[:4] != b"RIFF":
         return data, None
     rate = None
@@ -78,12 +65,7 @@ def _parse_wav(data: bytes) -> tuple[bytes, int | None]:
         if cid == b"fmt " and size >= 8:
             rate = int.from_bytes(data[pos + 12:pos + 16], "little")
         elif cid == b"data":
-            payload = data[pos + 8:]
-            if size and size <= len(payload):
-                payload = payload[:size]      # trustworthy, complete-file size
-            return payload, rate
-        if size <= 0:                          # placeholder — no more chunks
-            break                              #   can be walked past it
+            return data[pos + 8:pos + 8 + size], rate
         pos += 8 + size + (size % 2)
     return _strip_wav_header(data), rate
 
@@ -152,23 +134,9 @@ class SarvamTTS:
             if not audios:
                 raise ProviderError("sarvam_tts", "empty audio")
             wav = base64.b64decode(audios[0])
-            # Parse the header instead of blindly stripping it: Sarvam does not
-            # always honour the requested `speech_sample_rate`, and the REST path
-            # (unlike _synthesize_ws) used to ASSUME the PCM was already at
-            # tts_sample_rate. When the returned rate differed, the audio played
-            # back at the wrong SPEED (too fast/chipmunked or too slow/dragging)
-            # with no resample — a direct cause of the "sometimes too fast,
-            # sometimes too slow" complaint. Resample to our canonical rate so
-            # everything downstream (loudness, Exotel leg resampler) is correct.
-            pcm, hdr_rate = _parse_wav(wav)
+            pcm = _strip_wav_header(wav)
             if not pcm:
                 raise ProviderError("sarvam_tts", "WAV contained no PCM data")
-            if hdr_rate and hdr_rate != self.s.tts_sample_rate:
-                from ..telephony.resample import resample_pcm16
-                log.warning("sarvam_tts: REST returned %d Hz but pipeline expects "
-                            "%d Hz — resampling (else playback speed is wrong)",
-                            hdr_rate, self.s.tts_sample_rate)
-                pcm = resample_pcm16(pcm, hdr_rate, self.s.tts_sample_rate)
             self._cache[key] = pcm
             while len(self._cache) > 256:
                 self._cache.popitem(last=False)
@@ -229,20 +197,8 @@ class SarvamTTS:
                 return
             except Exception as e:
                 if got_any:
-                    # Partial audio already sent — re-synthesizing and sending
-                    # the FULL text now would repeat/overlap the part the
-                    # caller already heard, which is worse than the truncation.
-                    # But leaving stream mode ON risks the SAME silent
-                    # mid-sentence cutoff on every following sentence too if
-                    # the connection is genuinely degraded (not a one-off) —
-                    # so disable streaming for the rest of THIS call, same as
-                    # the "failed before first chunk" branch below, and let
-                    # every subsequent sentence use the more reliable REST path.
-                    log.warning("tts-stream: failed mid-stream (%s) — this "
-                                "sentence was truncated; disabling stream mode "
-                                "for the rest of this session (REST fallback)", e)
-                    self._stream_disabled = True
-                    return
+                    log.warning("tts-stream: failed mid-stream (%s)", e)
+                    return                          # partial audio already sent
                 log.warning("tts-stream: failed before first chunk (%s) — REST "
                             "fallback for this session", e)
                 self._stream_disabled = True
@@ -264,7 +220,7 @@ class SarvamTTS:
           WAV output is self-describing (sample rate parsed from the header),
           so mismatched rates are resampled instead of playing chipmunked."""
         from sarvamai import AsyncSarvamAI, AudioOutput   # optional dependency
-        from ..telephony.resample import StreamResampler
+        from ..telephony.resample import resample_pcm16
         if self._stream_client is None:
             self._stream_client = AsyncSarvamAI(
                 api_subscription_key=self.s.sarvam_api_key)
@@ -272,23 +228,6 @@ class SarvamTTS:
         base = dict(target_language_code=_LANG_CODE.get(lang, "mr-IN"),
                     speaker=self.speaker, pace=pace)
         # (config-extras, assumed source sample rate when not self-describing)
-        #
-        # ORDER MATTERS FOR QUALITY, and this is the reference deployment's
-        # order. Asking for raw PCM already at tts_sample_rate is the CLEANEST
-        # possible path: no RIFF parsing, and — because the audio arrives at
-        # exactly the rate the pipeline expects — no resample here at all. The
-        # only conversion the samples then undergo in the whole outbound path
-        # is the single 24k->leg_rate step in ExotelTransport.send_bytes.
-        #
-        # This had been reordered to try WAV first, on the belief that the pcm
-        # shape "silently yields zero audio". That put every sentence through
-        # RIFF parsing plus TWO resampling stages (22050->24000 here, then
-        # 24000->16000 for the leg), and exposed it to the streaming-WAV size
-        # placeholder bug fixed in _parse_wav above. Reverted to the reference
-        # order. The fallback chain makes this safe rather than a gamble: if the
-        # pcm config genuinely produces no audio, the loop logs it and drops
-        # through to WAV exactly as before, and _ws_cfg_known then caches
-        # whichever shape actually worked so later sentences skip the probe.
         attempts = self._ws_cfg_known or [
             ({"output_audio_codec": "pcm",
               "speech_sample_rate": self.s.tts_sample_rate}, self.s.tts_sample_rate),
@@ -300,13 +239,6 @@ class SarvamTTS:
         for extras, assumed_rate in attempts:
             got_audio = False
             src_rate = assumed_rate
-            # Stateful — see StreamResampler — so the many small WAV chunks
-            # Sarvam streams for ONE sentence resample as one continuous
-            # signal instead of each independently restarting the
-            # interpolation reference (a click at every chunk boundary,
-            # compounding with the second independent resample this PCM
-            # gets in ExotelTransport.send_bytes downstream).
-            resampler: StreamResampler | None = None
             try:
                 async with self._stream_client.text_to_speech_streaming.connect(
                         model=self.s.tts_model, send_completion_event=True) as ws:
@@ -333,10 +265,8 @@ class SarvamTTS:
                             if pcm:
                                 got_audio = True
                                 if src_rate and src_rate != self.s.tts_sample_rate:
-                                    if resampler is None or resampler.src_rate != src_rate:
-                                        resampler = StreamResampler(
-                                            src_rate, self.s.tts_sample_rate)
-                                    pcm = resampler.process(pcm)
+                                    pcm = resample_pcm16(
+                                        pcm, src_rate, self.s.tts_sample_rate)
                                 yield pcm
                         else:
                             ev = getattr(getattr(message, "data", None),
