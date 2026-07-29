@@ -815,14 +815,20 @@ class ConversationManager:
                         buffer = parts[-1]
                     # ── secondary split: comma/pause for long buffers ───────
                     # If no sentence boundary found but buffer is long, split
-                    # at the last comma so TTS starts sooner. LATENCY: while
-                    # NOTHING has been voiced yet this turn, the threshold drops
-                    # to llm_first_flush_chars (default 80) — first audio starts
-                    # ~200 ms sooner on a long opening sentence, and only that
-                    # first segment pays the split-prosody cost.
-                    elif len(buffer) >= (
-                            getattr(self.s, "llm_first_flush_chars", 80)
-                            if self._turn_is_first else _FORCE_FLUSH_CHARS):
+                    # at the last comma so TTS starts sooner.
+                    #
+                    # ONE uniform threshold, deliberately. A lower first-segment
+                    # threshold (llm_first_flush_chars=80, now removed) bought
+                    # ~200 ms of first-audio latency but split nearly every
+                    # turn's opening sentence at a comma into two independent
+                    # Sarvam calls — each with its own prosody contour and its
+                    # own loudness. The caller heard the pitch contour restart
+                    # mid-sentence, a possible level step at the seam, and a gap
+                    # while the second half synthesized: audible as choppy
+                    # transitions and pauses in the wrong places. Matching the
+                    # reference deployment, every segment now uses the same
+                    # 160-char rule that protects whole-sentence intonation.
+                    elif len(buffer) >= _FORCE_FLUSH_CHARS:
                         pause_parts = _PAUSE_SPLIT.split(buffer)
                         if len(pause_parts) > 1:
                             # yield everything up to the last segment
