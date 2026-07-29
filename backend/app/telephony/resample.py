@@ -16,6 +16,24 @@ from __future__ import annotations
 import numpy as np
 
 
+def _design_lowpass(cutoff_hz: float, fs: int, ntaps: int = 63) -> np.ndarray:
+    """Linear-phase windowed-sinc low-pass, normalised to unity DC gain.
+
+    Hamming-windowed so the stopband is ~-53 dB, which is far below anything
+    audible once it has also been attenuated by the sinc roll-off. `ntaps` odd
+    keeps the group delay an exact integer ((ntaps-1)/2 samples ≈ 1.3 ms at
+    24 kHz — constant, so it shifts the whole stream and never smears it).
+    numpy only: scipy is an optional transitive dependency here and the
+    real-time audio path must not start requiring it.
+    """
+    if ntaps % 2 == 0:
+        ntaps += 1
+    fc = max(1e-6, min(0.499, cutoff_hz / float(fs)))   # cycles per sample
+    n = np.arange(ntaps, dtype=np.float64) - (ntaps - 1) / 2.0
+    h = 2.0 * fc * np.sinc(2.0 * fc * n) * np.hamming(ntaps)
+    return h / h.sum()
+
+
 def resample_pcm16(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
     """Resample little-endian 16-bit mono PCM from src_rate to dst_rate.
 
@@ -89,6 +107,39 @@ class StreamResampler:
         # expressed in input-sample units relative to the START of the chunk
         # about to be processed. Always in (-1, ratio) — see process() proof.
 
+        # ── ANTI-ALIAS FILTER (downsampling only) ────────────────────────────
+        # Measured, not assumed: feed a 9 kHz tone through 22050->24000->16000
+        # with no filter and the strongest component of the output sits at
+        # 7 kHz — folded straight back into the middle of the speech band.
+        #
+        # This matters because of what the live chain actually is. Sarvam's
+        # streaming socket returns 22050 Hz (confirmed on a real call:
+        # "working config found: {'output_audio_codec': 'wav'} (src rate
+        # 22050)"), so its content reaches ~11 kHz, while the Exotel leg is
+        # 16 kHz (also confirmed from media_format) and can only represent
+        # 8 kHz. Everything between 8 and 11 kHz has to go somewhere, and
+        # without a filter it mirrors down into 5-8 kHz as inharmonic noise.
+        # Sibilants (s, sh, ch) are exactly where TTS puts its 8-11 kHz
+        # energy, so the artifact is transient and consonant-locked — heard
+        # as crackling on speech rather than as steady distortion, which is
+        # how it was reported ("cracking in between").
+        #
+        # The module docstring above argued aliasing was inaudible because
+        # the audio is "band-limited ... in the 300-3400 Hz voice band". That
+        # holds for a narrowband 8 kHz telephone leg. It does NOT hold here:
+        # this leg is 16 kHz wideband, so the audible band runs to 8 kHz and
+        # the aliased energy lands inside it.
+        #
+        # Windowed-sinc FIR, numpy-only (scipy is an optional transitive dep
+        # and must not become required by the real-time path). Applied only
+        # when dst < src; upsampling cannot alias and is left untouched.
+        self._fir: np.ndarray | None = None
+        self._fir_tail: np.ndarray | None = None
+        if 0 < dst_rate < src_rate:
+            self._fir = _design_lowpass(cutoff_hz=0.45 * dst_rate,
+                                        fs=src_rate, ntaps=63)
+            self._fir_tail = np.zeros(self._fir.size - 1, dtype=np.float64)
+
     def process(self, pcm: bytes) -> bytes:
         if self.src_rate == self.dst_rate:
             return pcm
@@ -100,6 +151,15 @@ class StreamResampler:
                 return b""
 
         x = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
+
+        # Band-limit BEFORE the rate change. The filter carries its own tail
+        # across chunks (same reason the interpolator carries _prev_sample), so
+        # the filtered stream is identical however the audio is chunked.
+        if self._fir is not None:
+            padded = np.concatenate((self._fir_tail, x))
+            self._fir_tail = padded[-(self._fir.size - 1):].copy()
+            x = np.convolve(padded, self._fir, mode="valid")
+
         n_in = x.shape[0]
 
         if self._prev_sample is not None:
