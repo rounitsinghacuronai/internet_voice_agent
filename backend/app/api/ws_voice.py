@@ -160,15 +160,11 @@ class VoiceSession:
         # one-per-sentence so there is no pumping and no added latency; the same
         # leveled PCM feeds both the caller and the AEC reference.
         self._loudness = OutputLoudness(
+            avg_alpha=self.s.tts_loudness_avg_alpha,
             max_gain=self.s.tts_loudness_max_gain,
             min_gain=self.s.tts_loudness_min_gain,
             silence_rms=self.s.tts_loudness_silence_rms,
             limiter_ceiling=self.s.tts_loudness_limiter_ceiling,
-            sample_rate=self.s.tts_sample_rate,
-            attack_ms=self.s.tts_loudness_attack_ms,
-            release_ms=self.s.tts_loudness_release_ms,
-            avg_ms=self.s.tts_loudness_avg_ms,
-            window_ms=self.s.tts_loudness_window_ms,
         ) if self.s.tts_loudness_normalize else None
 
         # State machine — single source of truth for what the call is doing

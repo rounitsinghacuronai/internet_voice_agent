@@ -113,9 +113,14 @@ def test_director_picks_verification_when_asking_for_number():
     d = VoiceDirector()
     p = d.direct(SpeechContext(asking_for_number="account_no", verified=False))
     assert p.name is StyleName.VERIFICATION
-    # numbers read slower than normal speech, and now at a CONSISTENT pace across
-    # every style (unified so digits never sound "sometimes fast, sometimes slow")
-    assert p.number_pace <= 0.9 and p.number_pace == 0.85
+    # Digits read slower than normal speech, and PER STYLE — verification is the
+    # most deliberate of them all because that is where a misheard digit costs
+    # the most. Commit 10170ad flattened every style's number_pace to a uniform
+    # 0.85 on the theory that varying it sounded like the voice speeding up and
+    # slowing down; that also made verification digits FASTER than designed.
+    # Restored to the Jul 18 per-style values.
+    assert p.number_pace == 0.8
+    assert p.number_pace < p.pace          # digits slower than surrounding speech
 
 
 def test_director_picks_complaint_registered():

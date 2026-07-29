@@ -75,9 +75,35 @@ def test_manager_uses_the_first_flush_threshold_for_the_opening_segment():
     assert "self._turn_is_first" in code
 
 
-def test_purity_rewrite_stays_disabled():
-    """The one thing disabled on evidence, not comparison — it corrupted text."""
-    assert Settings().speech_language_purity is False
+def test_purity_rewrite_is_gone_entirely():
+    """conversation/purity.py was added Jul 21, never requested, and turned
+    grammatical Marathi into text valid in neither language
+    ('मी ऐकतो आहे' -> 'मी ऐकतो है'). Deleted rather than merely disabled."""
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "app" / "conversation" / "purity.py").exists()
+    src = (root / "app" / "speech" / "pipeline.py").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "enforce_language_purity" not in code
+    assert not hasattr(Settings(), "speech_language_purity")
+
+
+def test_loudness_leveler_is_per_sentence_not_a_continuous_compressor():
+    """The Jul 21 rewrite turned a per-sentence single-gain leveler into a
+    10 ms-window attack/release compressor, which rides the gain across each
+    phrase — the caller's 'sometimes loud, sometimes very low volume'.
+    Restored to the Jul 18 design: one gain, decided from the sentence's first
+    voiced audio and held for the whole sentence."""
+    from backend.app.audio.output_loudness import OutputLoudness
+
+    lev = OutputLoudness()
+    assert hasattr(lev, "_sentence_gain")     # per-sentence state
+    assert hasattr(lev, "_gain_locked")
+    s = Settings()
+    assert hasattr(s, "tts_loudness_avg_alpha")
+    for gone in ("tts_loudness_attack_ms", "tts_loudness_release_ms",
+                 "tts_loudness_avg_ms", "tts_loudness_window_ms"):
+        assert not hasattr(s, gone), f"{gone} is compressor-only and should be gone"
 
 
 # ── measured audio fixes must stay wired in ─────────────────────────────────
@@ -116,7 +142,10 @@ def test_pace_band_matches_the_known_good_values():
     s = Settings()
     assert s.speech_pace_min == 0.7
     assert s.speech_pace_max == 1.15
-    assert s.tts_pace == 1.0
+    # 1.10 is the Jul 18 known-good global rate. It was lowered to 1.0 on
+    # Jul 20 while matching another deployment; 1.0 is ~10% slower and is what
+    # the caller described as the agent "stretching the words".
+    assert s.tts_pace == 1.10
 
 
 def test_style_paces_are_not_clamped_by_the_band():

@@ -35,39 +35,37 @@ class Settings(BaseSettings):
     # Empty = auto-select by AGENT_GENDER (male→advait, female→ritu, see persona.py).
     # Set explicitly to pin any Bulbul v3 speaker.
     tts_speaker: str = ""
-    tts_pace: float = 1.0             # natural human speaking rate (matches the reference agent). Per-style pace multiplies this (clamped by speech_pace_max); >1.0 sounds fast/robotic.
+    # RESTORED to the Jul 18 value. This was lowered to 1.0 on Jul 20 as part of
+    # matching a different deployment; 1.0 is ~10% slower and is what the caller
+    # described as the agent "stretching the words".
+    tts_pace: float = 1.10            # global speaking rate ~1.10x; per-style pace multiplies this (clamped by speech_pace_max). Digit groups stay clear via each style's number_pace.
     tts_sample_rate: int = 24000
-    # ── OUTPUT loudness leveling — ON ─────────────────────────────────────────
+    # ── OUTPUT loudness leveling — ON, PER-SENTENCE ───────────────────────────
     # Sarvam Bulbul returns each sentence at a slightly different loudness, so
-    # sent out raw the agent's volume drifts audibly between sentences. This
-    # leveler tracks a smoothed envelope and pulls it toward the call's own
-    # running-average level (see audio/output_loudness.py).
+    # sent out raw the agent's volume drifts audibly between sentences.
     #
-    # HISTORY — READ BEFORE CHANGING. This was briefly defaulted to False on
-    # the theory that its continuous 10 ms/30 ms/120 ms-attack compressor was
-    # flattening intra-sentence dynamics and causing "pumping". That reasoning
-    # came from diffing against a DIFFERENT deployment that has no output gain
-    # stage at all. It was wrong for this deployment: git history shows this
-    # setting was True — with the identical continuous implementation,
-    # start_sentence() already a no-op — throughout the period the caller
-    # reported the voice sounding correct. Turning it off removed the thing
-    # holding the level steady, and the very next report was "sometimes loud,
-    # sometimes very low volume". Restored.
+    # HISTORY — READ BEFORE CHANGING. audio/output_loudness.py was written on
+    # Jul 18 as a PER-SENTENCE leveler: one constant gain, decided from the
+    # sentence's first voiced audio and held for the whole sentence. That has
+    # no intra-sentence dynamics at all, so it cannot pump.
     #
-    # The lesson generalises: the baseline for "what good sounded like" is this
-    # project's own history, not another project's file layout. A difference
-    # from the reference deployment is not by itself a defect.
+    # Commit 10170ad (Jul 21) rewrote it into a CONTINUOUS compressor — 10 ms
+    # analysis window, 30 ms RMS detector, 120 ms attack / 350 ms release,
+    # every window driven toward a 2.5 s running average. That genuinely does
+    # ride the gain across each phrase, boosting consonants and ducking vowels,
+    # and it is what the caller heard as volume wandering between loud and very
+    # low. The docstring here kept describing the OLD per-sentence behaviour
+    # long after the code stopped doing it, which is how it went unnoticed.
+    #
+    # Restored to the Jul 18 per-sentence implementation and its four knobs.
+    # The attack/release/avg/window settings the compressor needed are gone
+    # because nothing reads them any more.
     tts_loudness_normalize: bool = True
-    tts_loudness_max_gain: float = 2.0     # loudest boost for a too-quiet passage (+6 dB)
-    tts_loudness_min_gain: float = 0.5     # deepest cut for a too-loud passage (−6 dB)
-    tts_loudness_silence_rms: float = 0.005  # below this a window is silence — gain HELD, never boosted
+    tts_loudness_avg_alpha: float = 0.30   # EMA weight of each new sentence on the running level
+    tts_loudness_max_gain: float = 2.0     # loudest boost for a too-quiet sentence (+6 dB)
+    tts_loudness_min_gain: float = 0.5     # deepest cut for a too-loud sentence (−6 dB)
+    tts_loudness_silence_rms: float = 0.005  # below this a chunk is silence — never boosted
     tts_loudness_limiter_ceiling: float = 0.98  # soft-clip ceiling to prevent hard clipping
-    # Continuous (within-sentence) leveling time constants. Slow enough to smooth
-    # phrase-level "drop then rise" swings WITHOUT chasing syllables (no pumping).
-    tts_loudness_attack_ms: float = 120.0  # gain DROPS this fast when a passage is too loud
-    tts_loudness_release_ms: float = 350.0 # gain RISES this slowly when a passage is quiet
-    tts_loudness_avg_ms: float = 2500.0    # time constant of the running-average target level
-    tts_loudness_window_ms: float = 10.0   # analysis window for the level detector
     # NUMBER CAPTURE: read the digits captured so far back to the caller after
     # each pause ("72678… got it, please continue"), the way a human executive
     # notes a number. Off → silent buffering (old behaviour).
@@ -260,23 +258,6 @@ class Settings(BaseSettings):
     # another failure mode). OFF by default to protect the speech-to-speech
     # budget; the deterministic path already handles the real-time turn.
     speech_llm_restructure: bool = False
-    # Deterministic hi↔mr de-blending pass (conversation/purity.py), applied to
-    # every line just before TTS. OFF — it makes speech WORSE, not better.
-    # Production call 046362528d00: it rewrote clean, grammatical Marathi into
-    # sentences valid in neither language ('मी ऐकतो आहे' → 'मी ऐकतो है', a
-    # Marathi verb inflected for person paired with the Hindi copula). Its
-    # safety argument holds per-word and breaks per-sentence — grammar is not
-    # word-substitutable, and a 29-entry function-word table can only rewrite
-    # function words while leaving verbs, postpositions and agreement in the
-    # source language. Its >50%-of-tokens backstop guards against a WHOLLY
-    # foreign line and is blind to the real failure, a PARTIALLY rewritten one.
-    # Sarvam then has to pronounce text invalid in the language it was given,
-    # heard by the caller as fumbling, unclear speech. Blending is a real
-    # problem, but fixing it needs whole-clause translation, not a lookup
-    # table; the defence stays with the ACTIVE LANGUAGE directive and
-    # prompts/modules/03_language.md. The reference deployment has no such
-    # stage. Set SPEECH_LANGUAGE_PURITY=true to re-enable.
-    speech_language_purity: bool = False
     # Per-utterance pace bounds (absolute Sarvam pace). The Voice Director's
     # style pace multiplies Settings.tts_pace and is clamped into this range.
     #
