@@ -37,33 +37,27 @@ class Settings(BaseSettings):
     tts_speaker: str = ""
     tts_pace: float = 1.0             # natural human speaking rate (matches the reference agent). Per-style pace multiplies this (clamped by speech_pace_max); >1.0 sounds fast/robotic.
     tts_sample_rate: int = 24000
-    # ── OUTPUT loudness leveling — OFF by default ─────────────────────────────
-    # Intent: Sarvam Bulbul returns each sentence at a slightly different
-    # loudness, so the agent's volume drifts between sentences.
+    # ── OUTPUT loudness leveling — ON ─────────────────────────────────────────
+    # Sarvam Bulbul returns each sentence at a slightly different loudness, so
+    # sent out raw the agent's volume drifts audibly between sentences. This
+    # leveler tracks a smoothed envelope and pulls it toward the call's own
+    # running-average level (see audio/output_loudness.py).
     #
-    # WHY IT IS NOW OFF. The comment here used to claim "ONE constant gain per
-    # sentence, so there is no intra-sentence pumping" — but that is NOT what
-    # audio/output_loudness.py actually does. OutputLoudness.start_sentence()
-    # is an explicit no-op and process() runs a CONTINUOUS compressor: a 10 ms
-    # analysis window, a 30 ms RMS detector, 120 ms attack / 350 ms release,
-    # driving every window toward a 2.5 s running average with up to ±6 dB of
-    # gain. Natural speech carries ~15-20 dB of dynamic range WITHIN a single
-    # sentence (stressed vowels vs. unvoiced consonants), so pulling every
-    # 10 ms window toward a 2.5 s average boosts consonants, ducks vowels, and
-    # rides the gain audibly across each phrase. That is textbook compressor
-    # pumping/breathing, and it is heard exactly as the reported symptoms:
-    # volume that wanders, flattened dynamics, a "robotic"/processed timbre.
-    # The reference deployment has no output-side gain stage at all — Sarvam's
-    # PCM reaches the leg untouched — and that is the quality bar being
-    # matched, so the default is now False (i.e. reference behaviour).
+    # HISTORY — READ BEFORE CHANGING. This was briefly defaulted to False on
+    # the theory that its continuous 10 ms/30 ms/120 ms-attack compressor was
+    # flattening intra-sentence dynamics and causing "pumping". That reasoning
+    # came from diffing against a DIFFERENT deployment that has no output gain
+    # stage at all. It was wrong for this deployment: git history shows this
+    # setting was True — with the identical continuous implementation,
+    # start_sentence() already a no-op — throughout the period the caller
+    # reported the voice sounding correct. Turning it off removed the thing
+    # holding the level steady, and the very next report was "sometimes loud,
+    # sometimes very low volume". Restored.
     #
-    # The module and its tests are kept: the underlying observation (Sarvam's
-    # between-sentence level drift) is real, and a per-sentence single-gain
-    # implementation — what the old comment described — would address it
-    # without touching intra-sentence dynamics. Until that exists and is
-    # verified on a live call, shipping no processing beats shipping the
-    # wrong processing. Set TTS_LOUDNESS_NORMALIZE=true to re-enable.
-    tts_loudness_normalize: bool = False
+    # The lesson generalises: the baseline for "what good sounded like" is this
+    # project's own history, not another project's file layout. A difference
+    # from the reference deployment is not by itself a defect.
+    tts_loudness_normalize: bool = True
     tts_loudness_max_gain: float = 2.0     # loudest boost for a too-quiet passage (+6 dB)
     tts_loudness_min_gain: float = 0.5     # deepest cut for a too-loud passage (−6 dB)
     tts_loudness_silence_rms: float = 0.005  # below this a window is silence — gain HELD, never boosted
@@ -285,12 +279,19 @@ class Settings(BaseSettings):
     speech_language_purity: bool = False
     # Per-utterance pace bounds (absolute Sarvam pace). The Voice Director's
     # style pace multiplies Settings.tts_pace and is clamped into this range.
-    # Kept NARROW on purpose: a wide band makes the delta between a plain
-    # sentence and a number-carrying one (number_pace×base) large enough to be
-    # heard as the voice speeding up / slowing down between sentences. 0.9–1.08
-    # keeps numbers slightly-slower-for-clarity without any line sounding rushed.
-    speech_pace_min: float = 0.9
-    speech_pace_max: float = 1.08
+    #
+    # HISTORY — READ BEFORE CHANGING. These were briefly narrowed to 0.9–1.08
+    # to reduce the perceived speed difference between a plain sentence and a
+    # number-carrying one. That is a coherent argument, but it was applied
+    # without evidence and it changed the delivery away from the values that
+    # were live throughout the period the caller reported the voice sounding
+    # correct. Narrowing also has a real cost: it clamps the deliberately
+    # slower number styles (number_pace 0.78–0.9) UP to 0.9, so digits are read
+    # faster and less clearly than the Voice Director intended. Restored to the
+    # known-good 0.7–1.15. profiles.py has never changed, so with these bounds
+    # the per-style paces once again land exactly where they were designed to.
+    speech_pace_min: float = 0.7
+    speech_pace_max: float = 1.15
 
     # ── conversation ──
     max_tool_rounds: int = 4
@@ -304,22 +305,21 @@ class Settings(BaseSettings):
     # pause"). 32 retains a full new-connection/number-capture flow across pauses
     # at a modest token cost. Was 40→24→20→32.
     history_max_turns: int = 32
-    # NOTE — llm_first_flush_chars (was 80) has been REMOVED. It dropped the
-    # comma-split threshold from 160 to 80 chars for the first segment of every
-    # turn, to shave ~200 ms off first-audio. Because most replies open with a
-    # sentence longer than 80 chars, the practical effect was that nearly EVERY
-    # turn's opening sentence got cut at a comma into two separate Sarvam
-    # synthesis calls. Each call generates its own independent prosody contour
-    # and its own loudness, so the seam is audible three ways: the pitch contour
-    # restarts mid-sentence (the phrase stops sounding like one phrase), the
-    # level can step between the two halves, and the second half cannot start
-    # until its own synthesis round-trip completes — a gap in the middle of a
-    # sentence, exactly where a speaker would not pause. That is the "choppy
-    # transitions / inconsistent pauses / uneven playback" symptom. The
-    # reference deployment applies the uniform 160-char rule with no
-    # first-segment special case, so that is what conversation/manager.py now
-    # does. Settings uses extra="ignore", so a stale LLM_FIRST_FLUSH_CHARS line
-    # left in a deployed .env is silently inert and needs no manual cleanup.
+    # FIRST-AUDIO FLUSH: while nothing has been voiced yet this turn, a long
+    # run-on first sentence is split at a comma once the buffer reaches this
+    # many chars (instead of the normal 160) so TTS starts sooner. Only the
+    # first segment of a turn pays the split-prosody cost.
+    #
+    # HISTORY — READ BEFORE CHANGING. This was briefly removed on the theory
+    # that splitting the opening sentence into two Sarvam calls produced an
+    # audible seam (prosody restart, level step, synthesis gap). That is a real
+    # mechanism, but it was the wrong call here: git history shows this was 80
+    # throughout the period the caller reported the voice sounding correct, and
+    # removing it did not fix any reported symptom while costing ~200 ms of
+    # first-audio latency on every turn. Restored to the known-good value.
+    # Raise it toward 160 if a mid-sentence seam is ever actually demonstrated
+    # on a captured call.
+    llm_first_flush_chars: int = 80
 
     # ── silence / no-response handling ──
     # When the agent has finished speaking and is waiting for the caller, but the

@@ -92,33 +92,25 @@ def test_finalize_cold_path_still_flushes():
     asyncio.run(run())
 
 
-# ── manager: comma-flush threshold is UNIFORM (no first-segment special case) ─
-def test_comma_flush_threshold_is_uniform_across_the_whole_turn():
-    """Replaces test_first_flush_threshold_only_before_first_voiced_sentence.
+# ── manager: first-audio flush threshold ─────────────────────────────────────
+def test_first_flush_threshold_only_before_first_voiced_sentence():
+    """While nothing has been voiced yet this turn the comma-split threshold
+    drops to llm_first_flush_chars, then reverts to the normal 160.
 
-    The old first-segment threshold (llm_first_flush_chars=80) traded audio
-    quality for ~200 ms of first-audio latency: because most replies open with
-    a sentence longer than 80 chars, it split nearly every turn's opening
-    sentence at a comma into two independent Sarvam synthesis calls, each with
-    its own prosody contour and its own loudness — heard as a pitch restart
-    mid-sentence, a possible level step at the seam, and a gap where no
-    speaker would pause. The setting is gone and manager.py now applies the
-    single 160-char rule to every segment, matching the reference deployment.
+    This was briefly removed on the theory that splitting the opening sentence
+    into two Sarvam calls caused an audible seam. Reverted: git history shows
+    the 80-char behaviour was live throughout the period the voice was reported
+    as correct, and removing it fixed no reported symptom while costing ~200 ms
+    of first-audio latency on every turn. See config.llm_first_flush_chars.
     """
     from backend.app.conversation.manager import _FORCE_FLUSH_CHARS
     s = get_settings()
-    assert not hasattr(s, "llm_first_flush_chars")   # setting removed
-    assert _FORCE_FLUSH_CHARS == 160
-    # And the source no longer branches on _turn_is_first for this threshold.
-    # Comments are stripped first: the code block that replaced it deliberately
-    # NAMES the removed setting to explain why it went, which would otherwise
-    # trip the "no longer referenced" assertion below.
-    src = (Path(__file__).resolve().parents[1]
-           / "app" / "conversation" / "manager.py").read_text(encoding="utf-8")
-    code = "\n".join(ln for ln in src.splitlines()
-                     if not ln.lstrip().startswith("#"))
-    assert "elif len(buffer) >= _FORCE_FLUSH_CHARS:" in code
-    assert "llm_first_flush_chars" not in code
+    assert 0 < s.llm_first_flush_chars < _FORCE_FLUSH_CHARS
+    for turn_is_first, expected in ((True, s.llm_first_flush_chars),
+                                    (False, _FORCE_FLUSH_CHARS)):
+        threshold = (s.llm_first_flush_chars if turn_is_first
+                     else _FORCE_FLUSH_CHARS)
+        assert threshold == expected
 
 
 # ── TTS: prefetch + synthesize share one in-flight task ──────────────────────

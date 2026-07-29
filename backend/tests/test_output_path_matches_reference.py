@@ -1,61 +1,55 @@
-"""Locks the OUTBOUND audio path to the reference deployment's behaviour.
+"""Locks the OUTBOUND audio path to THIS project's known-good configuration.
 
-Context: voice quality regressed against the reference project (same codebase,
-different domain). A file-by-file audit of the output path found exactly two
-stages present here that the reference does not have, both added locally and
-neither verified on a live call:
+This file previously asserted the opposite of what it asserts now, and the
+reason is worth recording, because the mistake was methodological rather than
+technical.
 
-  1. audio/output_loudness.py, applied per TTS chunk in ws_voice._speak_sentence.
-     Documented in config.py as "ONE constant gain per sentence, so there is no
-     intra-sentence pumping" — but start_sentence() is a no-op and process()
-     is a CONTINUOUS compressor (10 ms window, 30 ms RMS detector, 120 ms
-     attack / 350 ms release, every window driven toward a 2.5 s running
-     average, up to +/-6 dB). Speech carries ~15-20 dB of dynamic range within
-     one sentence, so that boosts consonants, ducks vowels and rides the gain
-     across each phrase — compressor pumping, heard as wandering volume,
-     flattened dynamics and a processed/"robotic" timbre.
+The outbound path was diffed against a different deployment ("the reference")
+whose voice quality the caller liked, and every difference was treated as a
+defect. On that basis three things were switched off: the output loudness
+leveler, the first-audio comma flush, and the hi<->mr purity rewrite. But the
+correct baseline was never the other project's file layout — it was THIS
+project's own history. Git shows the loudness leveler (with the identical
+continuous implementation, start_sentence() already a no-op) and the 80-char
+first flush were both live throughout the period the caller reported the voice
+sounding correct. Disabling them removed what was holding the level steady, and
+the next report was "sometimes slow and loud, sometimes fast and very low
+volume".
 
-  2. llm_first_flush_chars=80 in conversation/manager.py, which dropped the
-     comma-split threshold from 160 to 80 for the first segment of each turn.
-     Most replies open with a sentence longer than 80 chars, so in practice
-     nearly every turn's opening sentence was cut at a comma into two separate
-     Sarvam calls, each with its own prosody contour and loudness: pitch
-     restart mid-sentence, possible level step at the seam, and a synthesis gap
-     where no speaker would pause.
+What stays disabled, and why the asymmetry is principled:
 
-Both are now off/removed. These tests fail if either comes back silently.
+  - purity rewrite: OFF, on direct evidence rather than comparison. Production
+    logs show it turning grammatical Marathi into text valid in no language
+    ('मी ऐकतो आहे' -> 'मी ऐकतो है'), and the call after disabling it came back
+    with clean Hindi throughout. Kept off; see test_no_language_purity_rewrite.
 
-Deliberately NOT reverted (audited, kept — each is a strict improvement over
-the reference and none of them alters the signal the way the two above do):
-telephony/resample.py's StreamResampler (removes a per-chunk interpolation
-discontinuity the reference still has), sarvam_tts.py's REST WAV-header parse
-+ resample (the reference assumes the returned rate and plays at the wrong
-speed when it differs), and the narrower speech_pace_min/max band (0.9-1.08 vs
-the reference's 0.7-1.25 — narrower means LESS sentence-to-sentence speed
-variation, which is the stated goal).
+  - loudness leveler + first flush: ON, restored to the known-good values.
+    Both were disabled on reasoning, not measurement, and neither disabling
+    fixed a reported symptom.
+
+Measured audio fixes made along the way are independent of all this and stay:
+the anti-alias filter on the leg downsample, the streaming-WAV first-chunk
+parse, and the fade on severed tails.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.app.config import Settings, get_settings
 
 
-# ── 1. no output-side gain processing by default ─────────────────────────────
+# ── known-good configuration ────────────────────────────────────────────────
 
-def test_output_loudness_is_disabled_by_default():
-    """The reference has no output gain stage at all; Sarvam's PCM reaches the
-    leg untouched. That is the quality bar being matched."""
-    assert Settings().tts_loudness_normalize is False
+def test_output_loudness_is_enabled():
+    """Restored: this was True throughout the period the voice was correct."""
+    assert Settings().tts_loudness_normalize is True
 
 
-def test_voice_session_builds_no_loudness_stage_by_default():
+def test_voice_session_builds_the_loudness_stage():
     from backend.app.api import ws_voice
 
     deps = MagicMock()
@@ -64,79 +58,78 @@ def test_voice_session_builds_no_loudness_stage_by_default():
          patch.object(ws_voice, "Endpointer", MagicMock()), \
          patch.object(ws_voice, "AudioPipeline", MagicMock()):
         sess = ws_voice.VoiceSession(MagicMock(), deps)
-    assert sess._loudness is None
+    assert sess._loudness is not None
 
 
-@pytest.mark.asyncio
-async def test_tts_pcm_reaches_the_transport_byte_identical():
-    """End-to-end on the real _speak_sentence path: every byte Sarvam produced
-    must arrive at the transport unmodified. Any resampling, gain, limiting or
-    padding stage silently re-introduced into the output path breaks this."""
-    from backend.app.api import ws_voice
-    from backend.app.conversation.manager import TurnChunk
-
-    deps = MagicMock()
-    deps.settings = get_settings()
-
-    # Three chunks with full-scale peaks and near-silence: a compressor or a
-    # limiter would visibly alter these; a passthrough cannot.
-    source = [b"\x00\x7f" * 200, b"\x01\x00" * 200, b"\xff\x7f" * 200]
-
-    async def fake_synthesize(text, lang, pace):
-        for c in source:
-            yield c
-
-    deps.tts.synthesize = fake_synthesize
-
-    with patch.object(ws_voice, "SileroVAD", MagicMock()), \
-         patch.object(ws_voice, "Endpointer", MagicMock()), \
-         patch.object(ws_voice, "AudioPipeline", MagicMock()):
-        sess = ws_voice.VoiceSession(MagicMock(), deps)
-
-    sent: list[bytes] = []
-    sess.ws = MagicMock()
-    sess.ws.send_bytes = AsyncMock(side_effect=lambda b: sent.append(b))
-    sess._send = AsyncMock()
-    sess._advance_playhead = MagicMock()
-    sess._log_first_audio_latency = MagicMock()
-
-    await sess._speak_sentence(
-        TurnChunk("sentence", text="नमस्कार", language="mr", pace=1.0))
-
-    assert b"".join(sent) == b"".join(source)
+def test_first_flush_threshold_is_restored():
+    s = Settings()
+    assert s.llm_first_flush_chars == 80
 
 
-# ── 2. one uniform comma-flush threshold, no first-segment special case ──────
-
-def test_first_flush_setting_is_gone():
-    assert not hasattr(Settings(), "llm_first_flush_chars")
-
-
-def test_manager_uses_the_single_force_flush_threshold():
-    from backend.app.conversation.manager import _FORCE_FLUSH_CHARS
-
-    assert _FORCE_FLUSH_CHARS == 160
+def test_manager_uses_the_first_flush_threshold_for_the_opening_segment():
     src = (Path(__file__).resolve().parents[1]
            / "app" / "conversation" / "manager.py").read_text(encoding="utf-8")
     code = "\n".join(ln for ln in src.splitlines()
                      if not ln.lstrip().startswith("#"))
-    assert "elif len(buffer) >= _FORCE_FLUSH_CHARS:" in code
-    assert "llm_first_flush_chars" not in code
+    assert "llm_first_flush_chars" in code
+    assert "self._turn_is_first" in code
 
 
-# ── 3. the stages that WERE kept must stay wired in ──────────────────────────
+def test_purity_rewrite_stays_disabled():
+    """The one thing disabled on evidence, not comparison — it corrupted text."""
+    assert Settings().speech_language_purity is False
+
+
+# ── measured audio fixes must stay wired in ─────────────────────────────────
 
 def test_streaming_resamplers_still_used_on_both_legs():
-    """Guards against 'fixing' quality by reverting to the reference's
-    stateless per-chunk resample_pcm16, which clicks at every chunk seam."""
+    """Guards against reverting to the stateless per-chunk resample_pcm16,
+    which restarts interpolation at every chunk seam."""
     for mod in ("telephony/exotel.py", "providers/sarvam_tts.py"):
         src = (Path(__file__).resolve().parents[1] / "app" / mod
                ).read_text(encoding="utf-8")
         assert "StreamResampler" in src, f"{mod} lost its streaming resampler"
 
 
-def test_pace_band_stays_narrow():
+def test_leg_downsample_is_still_anti_aliased():
+    """Measured: without this a 9 kHz tone came out at 7 kHz, full strength."""
+    src = (Path(__file__).resolve().parents[1]
+           / "app" / "telephony" / "resample.py").read_text(encoding="utf-8")
+    assert "_design_lowpass" in src
+
+
+def test_severed_tails_are_still_faded():
+    """Measured: abrupt cuts at 42.1 s / 159.6 s / 217.8 s in a captured call."""
+    src = (Path(__file__).resolve().parents[1]
+           / "app" / "telephony" / "exotel.py").read_text(encoding="utf-8")
+    assert "_fade_out_tail" in src
+
+
+def test_pace_band_matches_the_known_good_values():
+    """Restored to 0.7–1.15. These were briefly narrowed to 0.9–1.08 to shrink
+    the perceived speed difference between plain and number-carrying lines —
+    coherent in theory, but applied without evidence, and it clamped the
+    deliberately slower number styles (number_pace 0.78–0.9) UP to 0.9, making
+    digits faster and less clear than the Voice Director intended.
+    profiles.py has never changed, so these bounds are what its per-style
+    paces were designed against."""
     s = Settings()
-    assert s.speech_pace_min >= 0.9
-    assert s.speech_pace_max <= 1.08
+    assert s.speech_pace_min == 0.7
+    assert s.speech_pace_max == 1.15
     assert s.tts_pace == 1.0
+
+
+def test_style_paces_are_not_clamped_by_the_band():
+    """The bounds must not silently rewrite any profile's intended delivery."""
+    from backend.app.speech.profiles import PROFILES
+
+    s = Settings()
+    for name, prof in PROFILES.items():
+        for label, val in (("pace", prof.pace), ("number_pace", prof.number_pace)):
+            if val is None:
+                continue
+            eff = val * s.tts_pace
+            assert s.speech_pace_min <= eff <= s.speech_pace_max, (
+                f"{name.value}.{label}={val} lands outside "
+                f"[{s.speech_pace_min}, {s.speech_pace_max}] and gets clamped"
+            )
