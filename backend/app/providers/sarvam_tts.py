@@ -54,7 +54,20 @@ def _strip_wav_header(data: bytes) -> bytes:
 
 def _parse_wav(data: bytes) -> tuple[bytes, int | None]:
     """Return (pcm, sample_rate|None). Raw PCM passes through with rate None;
-    a RIFF blob has its fmt chunk parsed so the true rate is self-describing."""
+    a RIFF blob has its fmt chunk parsed so the true rate is self-describing.
+
+    STREAMING WAV SIZE FIELDS. A WAV written to a stream cannot know its own
+    length in advance, so the 'data' chunk size is a placeholder — commonly 0,
+    sometimes 0xFFFFFFFF, sometimes the declared total rather than what is in
+    THIS message. Slicing data[pos+8 : pos+8+size] therefore returned b"" when
+    the placeholder was 0, silently discarding the first streamed chunk of the
+    sentence — the one carrying the WAV header, i.e. the audio for the opening
+    ~200 ms. The caller heard the first syllable of the greeting (and of every
+    sentence) clipped off, which reads as a disturbed/glitchy start rather
+    than as missing audio. Treat the size as an upper bound only when it is
+    both non-zero and actually present in this buffer; otherwise take
+    everything after the header.
+    """
     if data[:4] != b"RIFF":
         return data, None
     rate = None
@@ -65,7 +78,12 @@ def _parse_wav(data: bytes) -> tuple[bytes, int | None]:
         if cid == b"fmt " and size >= 8:
             rate = int.from_bytes(data[pos + 12:pos + 16], "little")
         elif cid == b"data":
-            return data[pos + 8:pos + 8 + size], rate
+            payload = data[pos + 8:]
+            if size and size <= len(payload):
+                payload = payload[:size]      # trustworthy, complete-file size
+            return payload, rate
+        if size <= 0:                          # placeholder — no more chunks
+            break                              #   can be walked past it
         pos += 8 + size + (size % 2)
     return _strip_wav_header(data), rate
 
@@ -254,15 +272,27 @@ class SarvamTTS:
         base = dict(target_language_code=_LANG_CODE.get(lang, "mr-IN"),
                     speaker=self.speaker, pace=pace)
         # (config-extras, assumed source sample rate when not self-describing)
-        # WAV is tried FIRST: it is the config Sarvam Bulbul v3 actually honours on
-        # the streaming socket (self-describing rate, so we just resample). The
-        # pcm+speech_sample_rate shape is accepted but silently yields zero audio
-        # on the current server build, which used to log a spurious
-        # "produced no audio" warning and waste a probe on every cold start.
+        #
+        # ORDER MATTERS FOR QUALITY, and this is the reference deployment's
+        # order. Asking for raw PCM already at tts_sample_rate is the CLEANEST
+        # possible path: no RIFF parsing, and — because the audio arrives at
+        # exactly the rate the pipeline expects — no resample here at all. The
+        # only conversion the samples then undergo in the whole outbound path
+        # is the single 24k->leg_rate step in ExotelTransport.send_bytes.
+        #
+        # This had been reordered to try WAV first, on the belief that the pcm
+        # shape "silently yields zero audio". That put every sentence through
+        # RIFF parsing plus TWO resampling stages (22050->24000 here, then
+        # 24000->16000 for the leg), and exposed it to the streaming-WAV size
+        # placeholder bug fixed in _parse_wav above. Reverted to the reference
+        # order. The fallback chain makes this safe rather than a gamble: if the
+        # pcm config genuinely produces no audio, the loop logs it and drops
+        # through to WAV exactly as before, and _ws_cfg_known then caches
+        # whichever shape actually worked so later sentences skip the probe.
         attempts = self._ws_cfg_known or [
-            ({"output_audio_codec": "wav"}, None),        # rate read from header
             ({"output_audio_codec": "pcm",
               "speech_sample_rate": self.s.tts_sample_rate}, self.s.tts_sample_rate),
+            ({"output_audio_codec": "wav"}, None),        # rate read from header
             ({"output_audio_codec": "pcm"}, 22050),       # Bulbul REST default
         ]
 

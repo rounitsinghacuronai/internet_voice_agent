@@ -266,23 +266,6 @@ class Settings(BaseSettings):
     # another failure mode). OFF by default to protect the speech-to-speech
     # budget; the deterministic path already handles the real-time turn.
     speech_llm_restructure: bool = False
-    # Deterministic hi↔mr de-blending pass (conversation/purity.py), applied to
-    # every line just before TTS. OFF — it makes speech WORSE, not better.
-    # Production call 046362528d00: it rewrote clean, grammatical Marathi into
-    # sentences valid in neither language ('मी ऐकतो आहे' → 'मी ऐकतो है', a
-    # Marathi verb inflected for person paired with the Hindi copula). Its
-    # safety argument holds per-word and breaks per-sentence — grammar is not
-    # word-substitutable, and a 29-entry function-word table can only rewrite
-    # function words while leaving verbs, postpositions and agreement in the
-    # source language. Its >50%-of-tokens backstop guards against a WHOLLY
-    # foreign line and is blind to the real failure, a PARTIALLY rewritten one.
-    # Sarvam then has to pronounce text invalid in the language it was given,
-    # heard by the caller as fumbling, unclear speech. Blending is a real
-    # problem, but fixing it needs whole-clause translation, not a lookup
-    # table; the defence stays with the ACTIVE LANGUAGE directive and
-    # prompts/modules/03_language.md. The reference deployment has no such
-    # stage. Set SPEECH_LANGUAGE_PURITY=true to re-enable.
-    speech_language_purity: bool = False
     # Per-utterance pace bounds (absolute Sarvam pace). The Voice Director's
     # style pace multiplies Settings.tts_pace and is clamped into this range.
     # Kept NARROW on purpose: a wide band makes the delta between a plain
