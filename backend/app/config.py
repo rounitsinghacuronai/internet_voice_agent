@@ -362,6 +362,18 @@ class Settings(BaseSettings):
     admin_pass: str = "admin"          # seeded super-admin password — CHANGE in .env
     jwt_secret: str = ""               # HS256 signing secret; blank => auto-persisted file
 
+    # ── diagnostics ──
+    # When set to a writable directory, every Exotel call writes two WAV files
+    # capturing the outbound audio on both sides of the leg resample:
+    #   tts_<stream>.wav  — PCM as it left the TTS provider (tts_sample_rate)
+    #   leg_<stream>.wav  — PCM exactly as sent to Exotel (leg_rate)
+    # Listening to the pair localises distortion that server logs cannot see:
+    # both clean means the problem is downstream of us, tts-clean/leg-bad means
+    # the resample or the leg rate is wrong, both bad means the TTS output
+    # itself is damaged. See telephony/audio_dump.py. Unbounded — files grow for
+    # the whole call, so switch it off again after capturing a sample.
+    debug_audio_dump_dir: str = ""
+
     # ── data ──
     db_path: Path = ROOT / "backend" / "telecom.db"
 

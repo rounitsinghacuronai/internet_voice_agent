@@ -47,6 +47,7 @@ from fastapi import APIRouter, WebSocket
 
 from ..api.ws_voice import VoiceSession
 from ..config import Settings
+from .audio_dump import WavDump, open_dump
 from .resample import StreamResampler
 
 log = logging.getLogger(__name__)
@@ -158,6 +159,12 @@ class ExotelTransport:
         self._out_resampler: StreamResampler | None = None   # tts_rate -> leg_rate
         self._in_resampler: StreamResampler | None = None    # leg_rate -> input_sample_rate
 
+        # Diagnostic WAV capture of the outbound path (see audio_dump.py).
+        # Opened in _on_start, once leg_rate is known for real. Both stay None
+        # unless DEBUG_AUDIO_DUMP_DIR is set.
+        self._dump_tts: WavDump | None = None    # 24 kHz, before the resample
+        self._dump_leg: WavDump | None = None    # leg_rate, exactly what we send
+
     # ── VoiceSession-facing interface ──────────────────────────────────────────
 
     async def accept(self) -> None:
@@ -211,6 +218,31 @@ class ExotelTransport:
             self.stream_sid, self.call_sid, self.from_number, self.to_number,
             self.leg_rate, self.custom_parameters,
         )
+        # A leg rate that Exotel did NOT declare is a guess from .env, and a
+        # wrong guess distorts every sample we send (playback at the wrong
+        # speed/pitch, heard as robotic or "cracking"). That is invisible in
+        # the logs today, so say it plainly and at WARNING when unconfirmed.
+        if not rate:
+            log.warning(
+                "exotel start: media_format carried NO sample_rate — falling back "
+                "to EXOTEL_SAMPLE_RATE=%dHz. If the Voicebot applet URL's "
+                "?sample-rate= differs from this, every outbound sample is "
+                "resampled to the wrong rate and the caller hears distortion.",
+                self.leg_rate,
+            )
+        elif rate != self.s.exotel_sample_rate:
+            log.warning(
+                "exotel start: leg negotiated %dHz but EXOTEL_SAMPLE_RATE=%dHz — "
+                "using the negotiated %dHz. Update .env to match.",
+                rate, self.s.exotel_sample_rate, rate,
+            )
+        dump_dir = getattr(self.s, "debug_audio_dump_dir", "")
+        if dump_dir:
+            sid = (self.stream_sid or "nostream")[:16]
+            self._dump_tts = open_dump(dump_dir, f"tts_{sid}.wav", self._tts_rate)
+            self._dump_leg = open_dump(dump_dir, f"leg_{sid}.wav", self.leg_rate)
+            log.warning("exotel: DEBUG audio capture ON -> %s (unset "
+                        "DEBUG_AUDIO_DUMP_DIR when done)", dump_dir)
 
     async def receive(self) -> dict:
         """Return a Starlette-shaped message dict VoiceSession understands.
@@ -321,11 +353,24 @@ class ExotelTransport:
             return
         if self._out_resampler is None:
             self._out_resampler = StreamResampler(self._tts_rate, self.leg_rate)
-        self._out_buf.extend(self._out_resampler.process(pcm))
+        out = self._out_resampler.process(pcm)
+        # DIAGNOSTIC (off unless DEBUG_AUDIO_DUMP_DIR is set) — capture the same
+        # samples on BOTH sides of the resample so the two files can be listened
+        # to and compared. See telephony/audio_dump.py for what each outcome
+        # means. Never allowed to affect the audio path.
+        if self._dump_tts is not None:
+            self._dump_tts.write(pcm)
+        if self._dump_leg is not None:
+            self._dump_leg.write(out)
+        self._out_buf.extend(out)
         await self._flush_out(force=False)
 
     async def close(self) -> None:
         self._closed = True
+        for d in (self._dump_tts, self._dump_leg):
+            if d is not None:
+                d.close()
+        self._dump_tts = self._dump_leg = None
         try:
             await self.ws.close()
         except Exception:
