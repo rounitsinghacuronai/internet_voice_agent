@@ -76,16 +76,45 @@ class SpeechDirector:
             notes.append("gender-fix")
             cleaned = corrected
 
-        # ── language purity: de-blend hi↔mr drift before TTS ──
-        # Gemini Flash slides between Hindi and Marathi mid-sentence (shared
-        # script). The LanguageEngine has already pinned the correct base
-        # language for this line, so any sister-language tokens here are drift —
-        # rewrite them. Re-run gender after, since the swap can introduce a
-        # Hindi/Marathi first-person form of the opposite gender.
-        pure, purity_changed = enforce_language_purity(cleaned, lang)
-        if purity_changed:
-            notes.append("purity-fix")
-            cleaned = self.persona.enforce_gender(pure, lang)
+        # ── language purity: de-blend hi↔mr drift before TTS — OFF by default ──
+        # The intent was real (Gemini Flash slides between Hindi and Marathi
+        # mid-sentence, they share the Devanagari script). The mechanism is not
+        # sound, and production call 046362528d00 showed why. Every one of these
+        # inputs was clean, grammatical Marathi; every output is ungrammatical:
+        #
+        #   'मी ऐकतो आहे.'                     → 'मी ऐकतो है.'
+        #   'अच्छा, तुम्हाला हिंदीमध्ये बोलायचं आहे का?' → '…आपको हिंदीमध्ये बोलायचं है का?'
+        #   'ठीक आहे, पुणे मध्ये तुम्हाला…हवं आहे.' → 'ठीक है, पुणे मध्ये आपको…चाहिए.'
+        #
+        # purity.py's stated safety argument — "each source token exists in only
+        # ONE of the two languages, so a swap can never change meaning" — holds
+        # at the WORD level and fails at the SENTENCE level. Grammar is not word-
+        # substitutable: 'मी ऐकतो' is a Marathi verb inflected for person, and
+        # pairing it with the Hindi copula 'है' produces a sentence that is valid
+        # in neither language. Its >50%-of-tokens backstop cannot catch this,
+        # because it only guards against a WHOLLY foreign line; the real failure
+        # is a PARTIALLY rewritten one ('मी ऐकतो आहे' is 3 tokens, only 1 is in
+        # the map, so 1 > 1.5 is false and the swap proceeds). A 29-entry
+        # function-word table can only ever rewrite function words while leaving
+        # verbs, postpositions and agreement in the source language — so partial
+        # substitution is strictly worse than leaving the line alone. Sarvam is
+        # then asked to pronounce text that is not valid in the language it was
+        # given, which is what the caller reported as fumbling, unclear speech
+        # they could not understand.
+        #
+        # Doing this correctly needs a translation of the whole clause, not a
+        # lookup table, so the deterministic pass is disabled and the reference
+        # deployment's behaviour (no such stage at all) is restored. The real
+        # defence against blending stays where it already is: the ACTIVE LANGUAGE
+        # directive and prompts/modules/03_language.md's one-language-per-sentence
+        # rule. Set SPEECH_LANGUAGE_PURITY=true to re-enable the old pass.
+        if getattr(self.s, "speech_language_purity", False):
+            pure, purity_changed = enforce_language_purity(cleaned, lang)
+            if purity_changed:
+                notes.append("purity-fix")
+                # Re-run gender: a swap can introduce an opposite-gender
+                # first-person form in the target language.
+                cleaned = self.persona.enforce_gender(pure, lang)
 
         segments = self.engine.shape(cleaned, lang, profile, ctx, self.variation)
         segments = self.prosody.plan(segments, lang, profile, ctx)
